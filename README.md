@@ -50,20 +50,29 @@ MMmaker/
 ### Docker 部署（推荐）
 
 ```bash
+# 1. 创建后端环境配置文件
+cp backend/.env.example backend/.env.dev
+# 编辑 backend/.env.dev，填写 API Key 和模型配置
+
+# 2. 启动所有服务
 docker-compose up -d
 ```
 
 访问：
 - 前端界面：http://localhost:5173
 - 后端 API：http://localhost:8000
+- API 文档：http://localhost:8000/docs
 
 ### 本地部署
 
 **后端**：
 ```bash
 cd backend
-uv sync
-ENV=DEV uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+pip install uv          # 安装 uv 包管理器
+cp .env.example .env.dev  # 创建环境配置文件
+# 编辑 .env.dev，填写 API Key 和模型配置
+uv sync                 # 安装 Python 依赖
+ENV=DEV uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 **前端**：

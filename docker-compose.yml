@@ -1,4 +1,7 @@
 # docker-compose.yml
+# 使用前请先创建后端环境配置文件：
+#   cp backend/.env.example backend/.env.dev
+#   然后编辑 backend/.env.dev 填写 API Key 和模型配置
 
 services:
   redis:
@@ -21,8 +24,9 @@ services:
     environment:
       - ENV=DEV
       - REDIS_URL=redis://redis:6379/0
+    # 仅挂载 app 源码和工作目录，避免覆盖容器内 .venv 等构建产物
     volumes:
-      - ./backend:/app
+      - ./backend/app:/app/app
       - ./backend/project/work_dir:/app/project/work_dir
     depends_on:
       - redis
@@ -36,6 +40,8 @@ services:
     container_name: mmmaker_frontend
     ports:
       - "5173:5173"
+    environment:
+      - VITE_API_TARGET=http://backend:8000
     depends_on:
       - backend
     stdin_open: true

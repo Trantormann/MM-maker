@@ -78,6 +78,11 @@ pnpm run dev
 ## Docker 部署
 
 ```bash
+# 1. 创建后端环境配置文件
+cp backend/.env.example backend/.env.dev
+# 编辑 backend/.env.dev，填写 API Key 和模型配置
+
+# 2. 启动所有服务
 docker-compose up -d
 ```
 
