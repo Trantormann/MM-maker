@@ -1,0 +1,45 @@
+# docker-compose.yml
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: mmmaker_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mmmaker_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env.dev
+    environment:
+      - ENV=DEV
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+      - ./backend/project/work_dir:/app/project/work_dir
+    depends_on:
+      - redis
+    stdin_open: true
+    tty: true
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mmmaker_frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    stdin_open: true
+    tty: true
+
+volumes:
+  redis_data:

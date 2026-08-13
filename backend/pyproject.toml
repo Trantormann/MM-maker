@@ -1,0 +1,59 @@
+[project]
+name = "mmmaker-backend"
+version = "0.1.0"
+description = "MMmaker - 国奖级数学建模竞赛自动化系统"
+requires-python = ">=3.12"
+dependencies = [
+    "aiofile>=3.9.0",
+    "aioredis>=2.0.1",
+    "anthropic>=0.40.0",
+    "e2b-code-interpreter>=1.0.5",
+    "fastapi[standard]>=0.115.8",
+    "httpx[socks]>=0.28.1",
+    "ipykernel>=6.29.5",
+    "jupyter-client>=8.6.3",
+    "loguru>=0.7.3",
+    "matplotlib>=3.10.1",
+    "nbformat>=5.10.4",
+    "numpy>=2.2.5",
+    "openai>=1.65.4",
+    "openpyxl>=3.1.5",
+    "pandas>=2.2.3",
+    "pydantic>=2.10.6",
+    "pydantic-settings>=2.8.0",
+    "redis>=5.2.1",
+    "requests>=2.32.0",
+    "scikit-learn>=1.6.1",
+    "scipy>=1.15.2",
+    "seaborn>=0.13.2",
+    "statsmodels>=0.14.4",
+    "uvicorn[standard]>=0.34.0",
+    "websocket>=0.2.1",
+    "xgboost>=3.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9.10",
+    "pyright>=1.1.390",
+]
+
+[tool.ruff]
+exclude = [
+    ".git", ".venv", "__pycache__", "node_modules", "dist", "build",
+]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008", "N818"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false
+pythonVersion = "3.12"
