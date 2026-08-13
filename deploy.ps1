@@ -165,12 +165,23 @@ if (Test-PortOpen 6379) {
     Write-Host "  Redis 已在运行（端口 6379）  OK"
 }
 else {
-    Write-Host "  Redis 未运行。任务执行依赖 Redis（消息队列与状态存储）。" -ForegroundColor Yellow
-    Write-Host "  可选安装方式：" -ForegroundColor Yellow
-    Write-Host "    - Memurai（Windows 推荐）: winget install Memurai.MemuraiDeveloper" -ForegroundColor Yellow
-    Write-Host "    - Redis for Windows: winget install tporadowski.Redis" -ForegroundColor Yellow
-    Write-Host "    - WSL: wsl --install 后执行 apt install redis-server" -ForegroundColor Yellow
-    Write-Host "  后端仍会启动，但运行建模任务前请先启动 Redis。" -ForegroundColor Yellow
+    Write-Host "  Redis 未运行，正在自动安装 Memurai（Redis 兼容服务）..." -ForegroundColor Yellow
+    & winget install -e --id Memurai.MemuraiDeveloper --accept-source-agreements --accept-package-agreements
+    Start-Sleep -Seconds 5
+    if (Test-PortOpen 6379) {
+        Write-Host "  Redis（Memurai）已启动  OK"
+    }
+    else {
+        Write-Host "  Memurai 安装后仍未监听 6379，尝试手动启动服务..." -ForegroundColor Yellow
+        try { Start-Service Memurai -ErrorAction Stop } catch {}
+        Start-Sleep -Seconds 3
+    }
+    if (-not (Test-PortOpen 6379)) {
+        Write-Host "  Redis 自动安装失败。请手动安装后重试：" -ForegroundColor Red
+        Write-Host "    winget install Memurai.MemuraiDeveloper" -ForegroundColor Red
+        Write-Host "    或 winget install tporadowski.Redis" -ForegroundColor Red
+        Write-Error "Redis 未就绪，后端依赖 Redis 运行任务。"
+    }
 }
 
 # ---------------------------------------------------------------------------
