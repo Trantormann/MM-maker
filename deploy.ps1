@@ -141,7 +141,7 @@ if (-not $SkipInstall) {
     Write-Step "4/6 安装前端依赖"
 
     Push-Location $FrontendDir
-    if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
+    if (-not (Test-Path (Join-Path $FrontendDir "node_modules/.bin/vite"))) {
         Write-Host "  安装 npm 依赖..."
         & pnpm install
         if ($LASTEXITCODE -ne 0) {
