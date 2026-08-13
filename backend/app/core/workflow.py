@@ -191,7 +191,7 @@ class MathModelWorkFlow(WorkFlow):
         # ========== 阶段 1: 问题拆解 ==========
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="识别用户意图和拆解问题中..."),
+            SystemMessage(content="阶段 1/6：协调者正在分析题目、拆解子问题..."),
         )
         await self._check_cancelled()
 
@@ -203,7 +203,7 @@ class MathModelWorkFlow(WorkFlow):
             logger.error(f"CoordinatorAgent 执行失败: {e}")
             raise
 
-        await self._publish_status("running", 10, "coordinator", f"拆解完成，共 {self.ques_count} 个问题")
+        await self._publish_status("running", 10, "coordinator", f"问题拆解完成，共 {self.ques_count} 个子问题")
 
         # HIL 检查点：问题拆解确认
         if self.hil_checkpoints.get("problem_split", False):
@@ -222,7 +222,7 @@ class MathModelWorkFlow(WorkFlow):
         # ========== 阶段 2: 建模设计 ==========
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="建模手开始建模中..."),
+            SystemMessage(content="阶段 2/6：建模手正在设计建模方案..."),
         )
         await self._check_cancelled()
 
@@ -266,7 +266,7 @@ class MathModelWorkFlow(WorkFlow):
         # ========== 阶段 3: 初始化环境 ==========
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="正在创建代码沙盒环境"),
+            SystemMessage(content="阶段 3/6：正在创建代码沙盒环境..."),
         )
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
@@ -318,6 +318,11 @@ class MathModelWorkFlow(WorkFlow):
         total_steps = len(solution_flows)
         current_step = 0
 
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content=f"阶段 4/6：开始求解，共 {total_steps} 个子问题"),
+        )
+
         for key, value in solution_flows.items():
             await self._check_cancelled()
             current_step += 1
@@ -325,7 +330,7 @@ class MathModelWorkFlow(WorkFlow):
 
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"代码手开始求解: {key}"),
+                SystemMessage(content=f"[{current_step}/{total_steps}] 代码手正在求解: {key}"),
             )
 
             coder_response = await coder_agent.run(
@@ -334,7 +339,7 @@ class MathModelWorkFlow(WorkFlow):
 
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"代码手求解成功: {key}", type="success"),
+                SystemMessage(content=f"[{current_step}/{total_steps}] 代码求解成功: {key}", type="success"),
             )
 
             # 评审代码结果
@@ -352,7 +357,7 @@ class MathModelWorkFlow(WorkFlow):
 
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"论文手开始写: {key}"),
+                SystemMessage(content=f"[{current_step}/{total_steps}] 写作手正在撰写: {key}"),
             )
 
             writer_response = await writer_agent.run(
@@ -363,7 +368,7 @@ class MathModelWorkFlow(WorkFlow):
 
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"论文手完成: {key}", type="success"),
+                SystemMessage(content=f"[{current_step}/{total_steps}] 章节完成: {key}", type="success"),
             )
 
             # 评审论文章节
@@ -388,6 +393,11 @@ class MathModelWorkFlow(WorkFlow):
         total_write = len(write_flows)
         current_write = 0
 
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content=f"阶段 5/6：开始整理论文，共 {total_write} 个章节"),
+        )
+
         for key, value in write_flows.items():
             await self._check_cancelled()
             current_write += 1
@@ -395,12 +405,16 @@ class MathModelWorkFlow(WorkFlow):
 
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"论文手开始写: {key}"),
+                SystemMessage(content=f"[{current_write}/{total_write}] 写作手正在撰写: {key}"),
             )
 
             writer_response = await writer_agent.run(prompt=value, sub_title=key)
             user_output.set_res(key, writer_response)
 
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"[{current_write}/{total_write}] 章节完成: {key}", type="success"),
+            )
             await self._publish_status("running", progress, "write", f"完成: {key}")
 
         # ========== 阶段 6: 最终评审 ==========
@@ -409,7 +423,7 @@ class MathModelWorkFlow(WorkFlow):
         if self.feedback_enabled:
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content="评审手进行最终评审..."),
+                SystemMessage(content="阶段 6/6：评审手正在进行最终评审..."),
             )
 
             final_review = await reviewer_agent.review_full_paper(full_paper)
@@ -438,13 +452,13 @@ class MathModelWorkFlow(WorkFlow):
             if checkpoint.action == HILAction.ABORT:
                 raise asyncio.CancelledError("用户中止任务")
 
-        # ========== 阶段 7: 保存结果 ==========
+        # ========== 保存结果 ==========
         user_output.save_result()
 
         await self._publish_status("completed", 100, "done", "任务完成")
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="数学建模任务完成！", type="success"),
+            SystemMessage(content="数学建模任务全部完成！论文已生成。", type="success"),
         )
 
         logger.info(f"任务 {self.task_id} 完成，结果保存在 {self.work_dir}")

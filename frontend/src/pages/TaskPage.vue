@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { marked } from "marked";
 import katex from "katex";
@@ -15,12 +15,30 @@ const taskId = route.params.taskId as string;
 let wsClient: WebSocketClient | null = null;
 const paperContent = ref("");
 const showPaper = ref(false);
+const autoScroll = ref(true);
+
+// ---- 阶段定义 ----
+const stages = [
+	{ key: "init", label: "初始化", icon: "⚙️" },
+	{ key: "coordinator", label: "问题拆解", icon: "🔍" },
+	{ key: "modeler", label: "建模设计", icon: "📐" },
+	{ key: "solve", label: "代码求解", icon: "💻" },
+	{ key: "write", label: "论文撰写", icon: "✍️" },
+	{ key: "done", label: "完成", icon: "✅" },
+];
+
+const currentStageIndex = computed(() => {
+	const idx = stages.findIndex((s) => s.key === taskStore.currentStage);
+	return idx >= 0 ? idx : 0;
+});
+
+const isRunning = computed(() => taskStore.status === "running");
+const isCompleted = computed(() => taskStore.status === "completed");
 
 // ---- Methods ----
 function renderMarkdown(content: string): string {
 	try {
 		const html = marked.parse(content, { async: false }) as string;
-		// 渲染 KaTeX 公式
 		return html.replace(/\$\$([\s\S]+?)\$\$|\$([^$]+?)\$/g, (match, block, inline) => {
 			const tex = block || inline;
 			try {
@@ -47,6 +65,19 @@ async function loadPaper() {
 	}
 }
 
+function scrollToBottom() {
+	if (!autoScroll.value) return;
+	const list = document.querySelector(".messages-list");
+	if (list) list.scrollTop = list.scrollHeight;
+}
+
+watch(
+	() => taskStore.messages.length,
+	() => {
+		setTimeout(scrollToBottom, 50);
+	},
+);
+
 onMounted(() => {
 	taskStore.clearMessages();
 	taskStore.setTaskId(taskId);
@@ -62,101 +93,77 @@ onUnmounted(() => {
 <template>
 	<div class="task-page">
 		<div class="task-layout">
-			<!-- 左侧：实时消息 -->
-			<div class="messages-panel">
-				<h2 class="panel-title">执行进度</h2>
-				<div class="progress-section">
-					<div class="progress-info">
-						<span>总体进度</span>
-						<span>{{ taskStore.progress }}%</span>
+			<!-- 左侧：进度面板 -->
+			<div class="progress-panel">
+				<!-- 总体进度 -->
+				<div class="overall-progress">
+					<div class="progress-header">
+						<span class="progress-title">总体进度</span>
+						<span class="progress-percent">{{ Math.round(taskStore.progress) }}%</span>
 					</div>
-					<div class="progress-track">
+					<div class="progress-bar-track">
 						<div
-							class="progress-value"
+							class="progress-bar-fill"
+							:class="{ completed: isCompleted, running: isRunning }"
 							:style="{ width: taskStore.progress + '%' }"
-						></div>
+						>
+							<div v-if="isRunning" class="progress-shimmer"></div>
+						</div>
 					</div>
 				</div>
 
-				<div class="messages-list">
+				<!-- 阶段步骤 -->
+				<div class="stage-steps">
 					<div
-						v-for="(msg, i) in taskStore.messages"
-						:key="i"
-						class="message"
-						:class="msg.type || 'info'"
+						v-for="(stage, i) in stages"
+						:key="stage.key"
+						class="stage-step"
+						:class="{
+							active: i === currentStageIndex && isRunning,
+							done: i < currentStageIndex || isCompleted,
+							pending: i > currentStageIndex,
+						}"
 					>
-						<div class="message-time">
-							{{ new Date().toLocaleTimeString() }}
+						<div class="stage-icon">
+							<span v-if="i < currentStageIndex || isCompleted" class="check">✓</span>
+							<span v-else-if="i === currentStageIndex && isRunning" class="spinner"></span>
+							<span v-else>{{ stage.icon }}</span>
 						</div>
-						<div class="message-content">
-							{{ msg.content || msg.message }}
+						<div class="stage-info">
+							<span class="stage-label">{{ stage.label }}</span>
+							<span v-if="i === currentStageIndex && isRunning" class="stage-status">
+								进行中...
+							</span>
 						</div>
-						<div v-if="msg.score !== undefined" class="message-score">
-							得分: {{ msg.score }}
-						</div>
-					</div>
-
-					<div
-						v-if="taskStore.messages.length === 0"
-						class="empty-state"
-					>
-						等待任务开始...
 					</div>
 				</div>
 
-				<!-- HIL 检查点 -->
-				<div v-if="taskStore.pendingCheckpoint" class="hil-panel">
-					<h3>⚠️ 需要您的决策</h3>
-					<p>阶段: {{ taskStore.pendingCheckpoint.stage }}</p>
-					<div class="hil-actions">
-						<button
-							class="hil-btn confirm"
-							@click="
-								modelingApi.submitHilDecision(
-									taskId,
-									taskStore.pendingCheckpoint.checkpoint_id!,
-									'confirm',
-								)
-							"
+				<!-- 实时消息 -->
+				<div class="messages-section">
+					<div class="messages-header">
+						<span>实时日志</span>
+						<label class="auto-scroll-toggle">
+							<input type="checkbox" v-model="autoScroll" />
+							自动滚动
+						</label>
+					</div>
+					<div class="messages-list">
+						<div
+							v-for="(msg, i) in taskStore.messages"
+							:key="i"
+							class="log-entry"
+							:class="msg.type || 'info'"
 						>
-							确认
-						</button>
-						<button
-							class="hil-btn regenerate"
-							@click="
-								modelingApi.submitHilDecision(
-									taskId,
-									taskStore.pendingCheckpoint.checkpoint_id!,
-									'regenerate',
-								)
-							"
-						>
-							重新生成
-						</button>
-						<button
-							class="hil-btn skip"
-							@click="
-								modelingApi.submitHilDecision(
-									taskId,
-									taskStore.pendingCheckpoint.checkpoint_id!,
-									'skip',
-								)
-							"
-						>
-							跳过
-						</button>
-						<button
-							class="hil-btn abort"
-							@click="
-								modelingApi.submitHilDecision(
-									taskId,
-									taskStore.pendingCheckpoint.checkpoint_id!,
-									'abort',
-								)
-							"
-						>
-							中止
-						</button>
+							<span class="log-dot"></span>
+							<span class="log-text">{{ msg.content || msg.message }}</span>
+							<span v-if="msg.score !== undefined" class="log-score">
+								得分: {{ msg.score }}
+							</span>
+						</div>
+						<div v-if="taskStore.messages.length === 0" class="empty-state">
+							<div class="empty-icon">⏳</div>
+							<p>等待任务开始...</p>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -165,8 +172,8 @@ onUnmounted(() => {
 			<div class="paper-panel">
 				<div class="paper-header">
 					<h2 class="panel-title">论文预览</h2>
-					<button class="load-btn" @click="loadPaper">
-						{{ showPaper ? "刷新论文" : "查看论文" }}
+					<button class="load-btn" :class="{ active: showPaper }" @click="loadPaper">
+						{{ showPaper ? "🔄 刷新" : "📄 查看论文" }}
 					</button>
 				</div>
 				<div v-if="showPaper" class="paper-content" v-html="renderMarkdown(paperContent)"></div>
@@ -187,19 +194,13 @@ onUnmounted(() => {
 
 .task-layout {
 	display: grid;
-	grid-template-columns: 380px 1fr;
-	gap: 24px;
+	grid-template-columns: 400px 1fr;
+	gap: 20px;
 	height: calc(100vh - 120px);
 }
 
-.panel-title {
-	font-size: 16px;
-	font-weight: 600;
-	margin-bottom: 16px;
-}
-
-/* 消息面板 */
-.messages-panel {
+/* ---- 进度面板 ---- */
+.progress-panel {
 	background: var(--bg-card);
 	border-radius: var(--radius);
 	padding: 20px;
@@ -208,140 +209,279 @@ onUnmounted(() => {
 	overflow: hidden;
 }
 
-.progress-section {
-	margin-bottom: 16px;
+.overall-progress {
+	margin-bottom: 20px;
 }
 
-.progress-info {
+.progress-header {
 	display: flex;
 	justify-content: space-between;
-	font-size: 13px;
-	color: var(--text-secondary);
-	margin-bottom: 6px;
+	align-items: center;
+	margin-bottom: 8px;
 }
 
-.progress-track {
-	height: 8px;
+.progress-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.progress-percent {
+	font-size: 20px;
+	font-weight: 700;
+	color: var(--primary);
+}
+
+.progress-bar-track {
+	height: 10px;
 	background: var(--border);
-	border-radius: 4px;
+	border-radius: 6px;
+	overflow: hidden;
+	position: relative;
+}
+
+.progress-bar-fill {
+	height: 100%;
+	border-radius: 6px;
+	transition: width 0.6s ease;
+	position: relative;
 	overflow: hidden;
 }
 
-.progress-value {
-	height: 100%;
+.progress-bar-fill.running {
+	background: linear-gradient(90deg, var(--primary), var(--primary-light));
+}
+
+.progress-bar-fill.completed {
+	background: var(--success);
+}
+
+.progress-shimmer {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		rgba(255, 255, 255, 0.3),
+		transparent
+	);
+	animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+	0% { transform: translateX(-100%); }
+	100% { transform: translateX(100%); }
+}
+
+/* ---- 阶段步骤 ---- */
+.stage-steps {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 20px;
+	padding: 16px;
+	background: var(--bg);
+	border-radius: 10px;
+}
+
+.stage-step {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 10px;
+	border-radius: 8px;
+	transition: all 0.3s;
+}
+
+.stage-step.active {
+	background: rgba(37, 99, 235, 0.08);
+}
+
+.stage-step.done {
+	opacity: 0.6;
+}
+
+.stage-icon {
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 14px;
+	flex-shrink: 0;
+	background: var(--border);
+}
+
+.stage-step.active .stage-icon {
 	background: var(--primary);
-	border-radius: 4px;
-	transition: width 0.5s ease;
+	color: white;
+}
+
+.stage-step.done .stage-icon {
+	background: var(--success);
+	color: white;
+}
+
+.stage-step.done .check {
+	font-size: 14px;
+	font-weight: 700;
+}
+
+.spinner {
+	width: 14px;
+	height: 14px;
+	border: 2px solid rgba(255, 255, 255, 0.3);
+	border-top-color: white;
+	border-radius: 50%;
+	animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+	to { transform: rotate(360deg); }
+}
+
+.stage-info {
+	display: flex;
+	flex-direction: column;
+}
+
+.stage-label {
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text);
+}
+
+.stage-step.active .stage-label {
+	color: var(--primary);
+	font-weight: 600;
+}
+
+.stage-status {
+	font-size: 11px;
+	color: var(--primary);
+}
+
+/* ---- 消息日志 ---- */
+.messages-section {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.messages-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-secondary);
+	margin-bottom: 10px;
+}
+
+.auto-scroll-toggle {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 11px;
+	font-weight: 400;
+	cursor: pointer;
+}
+
+.auto-scroll-toggle input {
+	width: 14px;
+	height: 14px;
 }
 
 .messages-list {
 	flex: 1;
 	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
 }
 
-.message {
-	padding: 10px 12px;
-	border-radius: 8px;
-	margin-bottom: 8px;
-	background: var(--bg);
-	font-size: 13px;
-}
-
-.message.success {
-	background: #f0fdf4;
-	border-left: 3px solid var(--success);
-}
-
-.message.warning {
-	background: #fffbeb;
-	border-left: 3px solid var(--warning);
-}
-
-.message.error {
-	background: #fef2f2;
-	border-left: 3px solid var(--danger);
-}
-
-.message.info {
-	border-left: 3px solid var(--primary);
-}
-
-.message-time {
-	font-size: 11px;
+.log-entry {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 6px 10px;
+	border-radius: 6px;
+	font-size: 12px;
+	line-height: 1.5;
 	color: var(--text-secondary);
-	margin-bottom: 4px;
+	transition: background 0.2s;
 }
 
-.message-score {
+.log-entry:hover {
+	background: var(--bg);
+}
+
+.log-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	margin-top: 6px;
+	flex-shrink: 0;
+	background: var(--text-secondary);
+}
+
+.log-entry.success .log-dot {
+	background: var(--success);
+}
+
+.log-entry.success {
+	color: var(--success);
+}
+
+.log-entry.warning .log-dot {
+	background: var(--warning);
+}
+
+.log-entry.error .log-dot {
+	background: var(--danger);
+}
+
+.log-entry.error {
+	color: var(--danger);
+}
+
+.log-entry.info .log-dot {
+	background: var(--primary);
+}
+
+.log-entry.info {
+	color: var(--text);
+}
+
+.log-text {
+	flex: 1;
+}
+
+.log-score {
 	font-weight: 600;
 	color: var(--primary);
-	margin-top: 4px;
 }
 
 .empty-state {
-	text-align: center;
-	color: var(--text-secondary);
-	padding: 40px 0;
-	font-size: 14px;
-}
-
-/* HIL 面板 */
-.hil-panel {
-	background: #fff7ed;
-	border: 1px solid #fed7aa;
-	border-radius: 8px;
-	padding: 16px;
-	margin-top: 16px;
-}
-
-.hil-panel h3 {
-	font-size: 14px;
-	margin-bottom: 8px;
-	color: #c2410c;
-}
-
-.hil-panel p {
-	font-size: 13px;
-	margin-bottom: 12px;
-}
-
-.hil-actions {
+	flex: 1;
 	display: flex;
-	gap: 8px;
-	flex-wrap: wrap;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-secondary);
 }
 
-.hil-btn {
-	padding: 8px 16px;
-	border-radius: 6px;
-	border: none;
-	cursor: pointer;
-	font-size: 13px;
-	font-weight: 500;
-	transition: all 0.2s;
+.empty-icon {
+	font-size: 36px;
+	margin-bottom: 8px;
 }
 
-.hil-btn.confirm {
-	background: var(--success);
-	color: white;
-}
-
-.hil-btn.regenerate {
-	background: var(--primary);
-	color: white;
-}
-
-.hil-btn.skip {
-	background: var(--text-secondary);
-	color: white;
-}
-
-.hil-btn.abort {
-	background: var(--danger);
-	color: white;
-}
-
-/* 论文面板 */
+/* ---- 论文面板 ---- */
 .paper-panel {
 	background: var(--bg-card);
 	border-radius: var(--radius);
@@ -358,23 +498,38 @@ onUnmounted(() => {
 	margin-bottom: 16px;
 }
 
+.panel-title {
+	font-size: 16px;
+	font-weight: 600;
+}
+
 .load-btn {
 	padding: 8px 16px;
 	background: var(--primary);
 	color: white;
 	border: none;
-	border-radius: 6px;
+	border-radius: 8px;
 	cursor: pointer;
 	font-size: 13px;
+	font-weight: 500;
+	transition: all 0.2s;
+}
+
+.load-btn:hover {
+	background: var(--primary-dark);
+}
+
+.load-btn.active {
+	background: var(--text-secondary);
 }
 
 .paper-content {
 	flex: 1;
 	overflow-y: auto;
-	padding: 20px;
+	padding: 24px;
 	background: white;
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: 10px;
 	line-height: 1.8;
 	font-size: 14px;
 }

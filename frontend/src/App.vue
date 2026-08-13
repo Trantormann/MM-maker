@@ -57,9 +57,13 @@ const stageLabel = computed(() => {
 	display: flex;
 	align-items: center;
 	gap: 24px;
-	padding: 12px 24px;
+	padding: 10px 24px;
 	background: var(--bg-card);
 	border-bottom: 1px solid var(--border);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+	position: sticky;
+	top: 0;
+	z-index: 100;
 }
 
 .brand {
@@ -76,8 +80,11 @@ const stageLabel = computed(() => {
 
 .title {
 	font-size: 20px;
-	font-weight: 700;
-	color: var(--primary);
+	font-weight: 800;
+	background: linear-gradient(135deg, var(--primary), var(--primary-light));
+	-webkit-background-clip: text;
+	-webkit-text-fill-color: transparent;
+	background-clip: text;
 }
 
 .subtitle {
@@ -108,6 +115,7 @@ const stageLabel = computed(() => {
 .nav-link.router-link-active {
 	background: var(--primary);
 	color: white;
+	font-weight: 500;
 }
 
 .stage-indicator {

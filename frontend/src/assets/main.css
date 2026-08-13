@@ -8,7 +8,7 @@
     --primary: #2563eb;
     --primary-light: #3b82f6;
     --primary-dark: #1d4ed8;
-    --bg: #f8fafc;
+    --bg: #f1f5f9;
     --bg-card: #ffffff;
     --text: #1e293b;
     --text-secondary: #64748b;
@@ -32,4 +32,23 @@ body {
 
 #app {
     height: 100%;
+}
+
+/* ---- 滚动条 ---- */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-secondary);
 }
