@@ -47,7 +47,63 @@ MMmaker/
 
 ## 快速开始
 
-### Docker 部署（推荐）
+### 方式一：一键部署脚本（推荐，Windows）
+
+```powershell
+# 在项目根目录执行
+.\deploy.ps1              # 完整部署（安装依赖 + 启动服务）
+.\deploy.ps1 -SkipInstall # 已安装过依赖，直接启动
+.\deploy.ps1 -Stop        # 停止服务
+```
+
+脚本会自动完成：环境检查 → 创建 `.env.dev` → 安装后端依赖 → 注册 Jupyter 内核 → 安装前端依赖 → 启动 Redis → 启动前后端服务。
+
+### 方式二：手动本地部署
+
+#### 环境要求
+
+- Python 3.12+
+- Node.js 20+ 与 pnpm
+- Redis（本地服务）
+
+#### Windows (PowerShell)
+
+```powershell
+# 后端
+cd backend
+Copy-Item .env.example .env.dev   # 创建配置文件，并编辑填写 API Key 和模型
+python -m venv .venv              # 创建虚拟环境
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt   # 安装 Python 依赖
+.\.venv\Scripts\python.exe -m ipykernel install --user --name mmmaker --display-name "MMmaker Python 3"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 前端（另开一个终端）
+cd frontend
+pnpm i
+pnpm run dev
+```
+
+> **Redis**：本地需先启动 Redis（端口 6379）。可用 `winget install Memurai.MemuraiDeveloper` 安装 Redis 兼容服务。
+> **注意**：若使用 Microsoft Store 版 Python，需先用 `python -m venv .venv` 创建虚拟环境（如上所示），再用 `.\.venv\Scripts\python.exe -m pip install` 安装依赖，避免 EFS 加密文件导致的安装失败。
+
+#### macOS / Linux
+
+```bash
+# 后端
+cd backend
+cp .env.example .env.dev        # 创建配置文件，并编辑填写 API Key 和模型
+python3 -m venv .venv           # 创建虚拟环境
+.venv/bin/python -m pip install -r requirements.txt   # 安装 Python 依赖
+.venv/bin/python -m ipykernel install --user --name mmmaker --display-name "MMmaker Python 3"
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 前端（另开一个终端）
+cd frontend
+pnpm i
+pnpm run dev
+```
+
+### Docker 部署（可选）
 
 ```bash
 # 1. 创建后端环境配置文件
@@ -62,25 +118,6 @@ docker-compose up -d
 - 前端界面：http://localhost:5173
 - 后端 API：http://localhost:8000
 - API 文档：http://localhost:8000/docs
-
-### 本地部署
-
-**后端**：
-```bash
-cd backend
-pip install uv          # 安装 uv 包管理器
-cp .env.example .env.dev  # 创建环境配置文件
-# 编辑 .env.dev，填写 API Key 和模型配置
-uv sync                 # 安装 Python 依赖
-ENV=DEV uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**前端**：
-```bash
-cd frontend
-pnpm i
-pnpm run dev
-```
 
 ## 智能体角色
 

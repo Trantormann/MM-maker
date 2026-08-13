@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     # ---- 代码沙盒 ----
     E2B_API_KEY: str | None = None
     CODE_INTERPRETER_KIND: str = "local"  # local | e2b
+    JUPYTER_KERNEL_NAME: str = "python3"  # 本地 Jupyter 内核名
 
     # ---- 文献检索 ----
     OPENALEX_EMAIL: str | None = None

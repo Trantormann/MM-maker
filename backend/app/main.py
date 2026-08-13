@@ -1,5 +1,6 @@
 """MMmaker 后端应用入口。"""
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,13 +10,15 @@ from fastapi.staticfiles import StaticFiles
 from app.routers import modeling_router, ws_router, common_router, files_router
 from app.utils.log_util import logger
 
+# 确保工作目录存在（StaticFiles 挂载时要求目录已存在，需在 import 阶段创建）
+os.makedirs("project/work_dir", exist_ok=True)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理。"""
     logger.info("Starting MMmaker Backend")
-    import os
-    os.makedirs("./project/work_dir", exist_ok=True)
+    os.makedirs("project/work_dir", exist_ok=True)
     yield
     logger.info("Stopping MMmaker Backend")
 

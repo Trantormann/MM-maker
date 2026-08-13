@@ -4,6 +4,7 @@ import os
 
 import jupyter_client
 
+from app.config.setting import settings
 from app.schemas.response import OutputItem, ResultModel, StdErrModel, SystemMessage
 from app.services.redis_manager import redis_manager
 from app.tools.base_interpreter import BaseCodeInterpreter
@@ -27,12 +28,12 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 
     async def initialize(self):
         """初始化 Jupyter 内核。"""
-        logger.info("初始化本地内核")
+        logger.info(f"初始化本地内核（{settings.JUPYTER_KERNEL_NAME}）")
         kernel_env = os.environ.copy()
         kernel_env["PYTHONIOENCODING"] = "utf-8"
         kernel_env["PYTHONUTF8"] = "1"
         self.km, self.kc = jupyter_client.manager.start_new_kernel(
-            kernel_name="python3", env=kernel_env
+            kernel_name=settings.JUPYTER_KERNEL_NAME, env=kernel_env
         )
         font_msg, font_type = self._pre_execute_code()
         if font_msg:
