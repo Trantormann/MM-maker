@@ -91,35 +91,54 @@ class WriterAgent(Agent):
         response_content: str = ""
 
         if response.tool_calls:
-            tool_call = response.tool_calls[0]
-            tool_id = tool_call.id
-            if tool_call.name == "search_papers":
-                logger.info("调用工具: search_papers")
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(content=f"写作手调用{tool_call.name}工具"),
-                )
+            # 只处理 search_papers 工具调用
+            tool_calls = [tc for tc in response.tool_calls if tc.name == "search_papers"]
 
-                query = json.loads(tool_call.arguments)["query"]
+            if tool_calls:
+                tool_call = tool_calls[0]
+                tool_id = tool_call.id
 
-                await redis_manager.publish_message(
-                    self.task_id,
-                    WriterMessage(content=query),
-                )
-
+                # 先写 assistant 消息（含 tool_calls），保证配对完整
                 assistant_msg: dict = {"role": "assistant", "content": response.content}
                 if response.reasoning_content:
                     assistant_msg["reasoning_content"] = response.reasoning_content
-                if response.tool_calls:
+                if tool_calls:
                     assistant_msg["tool_calls"] = [
                         {
                             "id": tc.id,
                             "type": "function",
                             "function": {"name": tc.name, "arguments": tc.arguments},
                         }
-                        for tc in response.tool_calls
+                        for tc in tool_calls
                     ]
                 await self.append_chat_history(assistant_msg)
+
+                logger.info("调用工具: search_papers")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="写作手调用search_papers工具"),
+                )
+
+                try:
+                    query = json.loads(tool_call.arguments)["query"]
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    logger.error(f"工具调用参数解析失败: {e}")
+                    await self.append_chat_history(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": "search_papers",
+                            "content": f"工具参数解析失败: {e}",
+                        }
+                    )
+                    return WriterResponse(
+                        response_content=f"文献检索失败: {e}", footnotes=footnotes
+                    )
+
+                await redis_manager.publish_message(
+                    self.task_id,
+                    WriterMessage(content=query),
+                )
 
                 try:
                     assert self.scholar is not None, "scholar 未初始化"
@@ -127,6 +146,15 @@ class WriterAgent(Agent):
                 except Exception as e:
                     error_msg = f"搜索文献失败: {str(e)}"
                     logger.error(error_msg)
+                    # 无论成败都追加 tool 响应，保证配对完整
+                    await self.append_chat_history(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": "search_papers",
+                            "content": error_msg,
+                        }
+                    )
                     return WriterResponse(
                         response_content=error_msg, footnotes=footnotes
                     )
@@ -148,6 +176,9 @@ class WriterAgent(Agent):
                     sub_title=sub_title,
                 )
                 response_content = next_response.content or ""
+            else:
+                # 模型返回了未知工具调用，直接使用响应文本
+                response_content = response.content or ""
         else:
             response_content = response.content or ""
 

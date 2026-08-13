@@ -113,79 +113,103 @@ class CoderAgent(Agent):
 
                 # 处理工具调用
                 if response.tool_calls:
-                    tool_call = response.tool_calls[0]
-                    tool_id = tool_call.id
+                    # 只处理 execute_code 工具
+                    tool_calls = [tc for tc in response.tool_calls if tc.name == "execute_code"]
 
-                    if tool_call.name == "execute_code":
+                    # 更新对话历史：先写 assistant 消息（含 tool_calls）
+                    assistant_msg: dict = {"role": "assistant", "content": response.content or ""}
+                    if response.reasoning_content:
+                        assistant_msg["reasoning_content"] = response.reasoning_content
+                    if tool_calls:
+                        assistant_msg["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.name, "arguments": tc.arguments},
+                            }
+                            for tc in tool_calls
+                        ]
+                    await self.append_chat_history(assistant_msg)
+
+                    if not tool_calls:
+                        # 模型返回了无法识别的工具调用，视为完成
+                        logger.warning("响应包含未知工具调用，视为任务完成")
+                        return CoderToWriter(
+                            code_response=response.content,
+                            created_images=await self.code_interpreter.get_created_images(
+                                subtask_title
+                            ),
+                        )
+
+                    # 依次执行每个工具调用，并为每个调用追加 tool 响应
+                    error_occurred = False
+                    for tool_call in tool_calls:
+                        tool_id = tool_call.id
                         logger.info(f"调用工具: {tool_call.name}")
+
                         await redis_manager.publish_message(
                             self.task_id,
                             SystemMessage(content=f"代码手调用{tool_call.name}工具"),
                         )
 
-                        code = json.loads(tool_call.arguments)["code"]
+                        try:
+                            code = json.loads(tool_call.arguments)["code"]
+                        except (json.JSONDecodeError, KeyError, TypeError) as e:
+                            logger.warning(f"工具调用参数解析失败: {e}")
+                            error_occurred = True
+                            await self.append_chat_history(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_id,
+                                    "name": "execute_code",
+                                    "content": f"工具参数解析失败: {e}",
+                                }
+                            )
+                            continue
 
                         await redis_manager.publish_message(
                             self.task_id,
                             InterpreterMessage(input={"code": code}),
                         )
 
-                        # 更新对话历史
-                        assistant_msg: dict = {"role": "assistant", "content": response.content}
-                        if response.reasoning_content:
-                            assistant_msg["reasoning_content"] = response.reasoning_content
-                        if response.tool_calls:
-                            assistant_msg["tool_calls"] = [
-                                {
-                                    "id": tc.id,
-                                    "type": "function",
-                                    "function": {"name": tc.name, "arguments": tc.arguments},
-                                }
-                                for tc in response.tool_calls
-                            ]
-                        await self.append_chat_history(assistant_msg)
-
                         # 执行代码
-                        (
-                            text_to_gpt,
-                            error_occurred,
-                            error_message,
-                        ) = await self.code_interpreter.execute_code(code)
+                        try:
+                            (
+                                text_to_gpt,
+                                exec_error,
+                                error_message,
+                            ) = await self.code_interpreter.execute_code(code)
+                        except Exception as e:
+                            logger.error(f"代码解释器执行异常: {e}")
+                            exec_error = True
+                            text_to_gpt = ""
+                            error_message = f"代码解释器执行异常: {e}"
 
-                        if error_occurred:
-                            await self.append_chat_history(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tool_id,
-                                    "name": "execute_code",
-                                    "content": error_message,
-                                }
-                            )
+                        # 无论成败都要追加 tool 响应，保证 tool_calls 配对完整
+                        await self.append_chat_history(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_id,
+                                "name": "execute_code",
+                                "content": error_message if exec_error else text_to_gpt,
+                            }
+                        )
 
+                        if exec_error:
+                            error_occurred = True
                             logger.warning(f"代码执行错误: {error_message}")
                             retry_count += 1
                             last_error_message = error_message
                             reflection_prompt = get_reflection_prompt(error_message, code)
-
                             await redis_manager.publish_message(
                                 self.task_id,
                                 SystemMessage(content="代码手反思纠正错误", type="error"),
                             )
-
                             await self.append_chat_history(
                                 {"role": "user", "content": reflection_prompt}
                             )
-                            continue
-                        else:
-                            await self.append_chat_history(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tool_id,
-                                    "name": "execute_code",
-                                    "content": text_to_gpt,
-                                }
-                            )
-                            continue
+
+                    continue
                 else:
                     # 没有工具调用，任务完成
                     logger.info("没有工具调用，任务完成")
