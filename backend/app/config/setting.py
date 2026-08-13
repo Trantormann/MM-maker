@@ -96,14 +96,14 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # ---- HIL 人机协作 ----
-    HIL_ENABLED: bool = True
+    HIL_ENABLED: bool = False
     HIL_TIMEOUT: int = 300  # 审批超时时间（秒）
     HIL_CHECKPOINTS: dict = {
-        "problem_split": True,      # 问题拆解后确认
-        "model_selection": True,    # 模型选择确认
-        "code_review": False,       # 代码审查（默认关闭，加速流程）
-        "paper_review": True,       # 论文评审
-        "final_review": True,       # 最终确认
+        "problem_split": False,     # 问题拆解后确认
+        "model_selection": False,   # 模型选择确认
+        "code_review": False,       # 代码审查
+        "paper_review": False,      # 论文评审
+        "final_review": False,      # 最终确认
     }
 
     # ---- 质量反馈 ----
