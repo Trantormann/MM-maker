@@ -16,6 +16,7 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
     """WebSocket 连接端点，订阅指定任务的消息。"""
     await ws_manager.connect(websocket, task_id)
     forward_task = None
+    pubsub = None
 
     try:
         # 同时订阅 Redis 消息并转发到 WebSocket
@@ -33,6 +34,8 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                             await ws_manager.send_message(
                                 task_id, {"content": message["data"], "type": "info"}
                             )
+            except asyncio.CancelledError:
+                logger.info(f"Redis 消息转发停止: {task_id}")
             except Exception as e:
                 logger.error(f"Redis 消息转发失败: {e}")
 
@@ -42,6 +45,12 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
         # 接收客户端消息
         while True:
             data = await websocket.receive_text()
+            # 心跳消息静默忽略，不产生日志
+            try:
+                if isinstance(data, str) and json.loads(data).get("type") == "ping":
+                    continue
+            except json.JSONDecodeError:
+                pass
             logger.debug(f"WebSocket 收到消息: {data}")
 
     except WebSocketDisconnect:
@@ -49,4 +58,9 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
     finally:
         if forward_task:
             forward_task.cancel()
+        if pubsub is not None:
+            try:
+                await pubsub.close()
+            except Exception as e:
+                logger.warning(f"关闭 Redis 订阅失败: {e}")
         ws_manager.disconnect(websocket, task_id)
