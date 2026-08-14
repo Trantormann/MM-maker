@@ -18,6 +18,8 @@ const showPaper = ref(false);
 const autoScroll = ref(true);
 const hilFeedback = ref("");
 const submittingDecision = ref(false);
+const resuming = ref(false);
+const error = ref("");
 
 // ---- 阶段定义 ----
 const stages = [
@@ -36,6 +38,8 @@ const currentStageIndex = computed(() => {
 
 const isRunning = computed(() => taskStore.status === "running");
 const isCompleted = computed(() => taskStore.status === "completed");
+const isError = computed(() => taskStore.status === "error");
+const isCancelled = computed(() => taskStore.status === "cancelled");
 const hasPendingCheckpoint = computed(() => taskStore.pendingCheckpoint !== null);
 
 const hilActions = [
@@ -92,6 +96,23 @@ async function submitDecision(action: string) {
 		console.error("提交决策失败", e);
 	} finally {
 		submittingDecision.value = false;
+	}
+}
+
+async function resumeTask() {
+	resuming.value = true;
+	try {
+		await modelingApi.resumeTask(taskId);
+		taskStore.clearMessages();
+		// 重新建立 WebSocket 连接以接收恢复后的消息
+		wsClient?.disconnect();
+		wsClient = new WebSocketClient(taskId);
+		wsClient.connect();
+	} catch (e: any) {
+		console.error("恢复任务失败", e);
+		error.value = e?.response?.data?.detail || e?.message || "恢复任务失败";
+	} finally {
+		resuming.value = false;
 	}
 }
 
@@ -193,6 +214,26 @@ onUnmounted(() => {
 						>
 							<span>{{ action.icon }}</span>
 							{{ action.label }}
+						</button>
+					</div>
+				</div>
+
+				<!-- 错误/取消状态面板 -->
+				<div v-if="isError || isCancelled" class="error-panel">
+					<div class="error-header">
+						<span class="error-icon">{{ isCancelled ? "⏹️" : "⚠️" }}</span>
+						<span class="error-title">{{ isCancelled ? "任务已停止" : "任务执行失败" }}</span>
+					</div>
+					<p class="error-msg">{{ taskStore.errorMessage || "发生未知错误" }}</p>
+					<div v-if="error" class="error-resume-msg">{{ error }}</div>
+					<div class="error-actions">
+						<button
+							class="resume-btn"
+							:disabled="resuming"
+							@click="resumeTask"
+						>
+							<span v-if="resuming" class="btn-spinner"></span>
+							{{ resuming ? "恢复中..." : "🔄 继续任务（从断点恢复）" }}
 						</button>
 					</div>
 				</div>
@@ -492,6 +533,75 @@ onUnmounted(() => {
 }
 
 .hil-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* ---- 错误/取消状态面板 ---- */
+.error-panel {
+	margin-bottom: 16px;
+	padding: 14px;
+	background: rgba(239, 68, 68, 0.08);
+	border: 1px solid rgba(239, 68, 68, 0.4);
+	border-radius: 10px;
+}
+
+.error-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.error-icon {
+	font-size: 18px;
+}
+
+.error-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.error-msg {
+	font-size: 12px;
+	color: var(--text-secondary);
+	margin-bottom: 8px;
+	word-break: break-all;
+	max-height: 80px;
+	overflow-y: auto;
+}
+
+.error-resume-msg {
+	font-size: 12px;
+	color: var(--danger, #ef4444);
+	margin-bottom: 8px;
+}
+
+.error-actions {
+	display: flex;
+	gap: 8px;
+}
+
+.resume-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 8px 14px;
+	border: none;
+	border-radius: 6px;
+	background: var(--primary);
+	color: white;
+	font-size: 13px;
+	cursor: pointer;
+	transition: opacity 0.2s;
+}
+
+.resume-btn:hover:not(:disabled) {
+	opacity: 0.9;
+}
+
+.resume-btn:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
 }

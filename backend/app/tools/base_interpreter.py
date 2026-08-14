@@ -62,6 +62,14 @@ class BaseCodeInterpreter(abc.ABC):
         if section_name not in self.section_output:
             self.section_output[section_name] = {"content": [], "images": []}
 
+    def set_image_baseline(self, images: set[str]) -> None:
+        """设置已存在的图片基线（断点续传恢复时使用）。
+
+        Args:
+            images: 已存在的图片相对路径集合。
+        """
+        self.last_created_images = set(images)
+
     def add_content(self, section: str, text: str) -> None:
         """向指定 section 添加文本内容。"""
         self.add_section(section)

@@ -46,6 +46,27 @@ class UserOutput:
         """获取所有章节的写作结果。"""
         return self.res
 
+    def to_dict(self) -> dict:
+        """序列化为可持久化的字典（用于断点续传 checkpoint）。"""
+        return {
+            "ques_count": self.ques_count,
+            "res": self.res,
+            "footnotes": self.footnotes,
+        }
+
+    @classmethod
+    def from_dict(cls, work_dir: str, data: dict) -> "UserOutput":
+        """从字典恢复 UserOutput（用于断点续传）。"""
+        obj = cls(work_dir=work_dir, ques_count=data.get("ques_count", 0))
+        obj.res = data.get("res", {})
+        obj.footnotes = data.get("footnotes", {})
+        return obj
+
+    def save_checkpoint(self, path: str) -> None:
+        """将当前结果保存为 checkpoint 文件。"""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, ensure_ascii=False, indent=4)
+
     def get_model_build_solve(self) -> str:
         """获取模型求解结果的摘要字符串。"""
         return ",".join(

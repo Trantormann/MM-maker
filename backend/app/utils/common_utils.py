@@ -22,6 +22,30 @@ def create_work_dir(task_id: str) -> str:
     return work_dir
 
 
+def find_work_dir(task_id: str, base_dir: str = "project/work_dir") -> str | None:
+    """按 task_id 前缀查找已存在的工作目录（用于断点续传与文件检索）。
+
+    Args:
+        task_id: 任务 ID。
+        base_dir: 工作目录根路径。
+
+    Returns:
+        找到的工作目录路径，未找到时返回 None。
+    """
+    if not os.path.exists(base_dir):
+        return None
+    matches = [
+        os.path.join(base_dir, d)
+        for d in os.listdir(base_dir)
+        if task_id[:8] in d
+    ]
+    if not matches:
+        return None
+    # 取最近修改的目录
+    matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return matches[0]
+
+
 def get_current_files(work_dir: str, subdir: str = "data") -> str:
     """获取工作目录下的文件列表。"""
     target_dir = os.path.join(work_dir, subdir)

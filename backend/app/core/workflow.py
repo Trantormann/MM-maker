@@ -1,6 +1,8 @@
 """工作流模块，编排多 Agent 协作完成数学建模任务。"""
 
 import asyncio
+import json
+import os
 
 from app.config.setting import settings
 from app.core.agents import (
@@ -13,7 +15,7 @@ from app.core.agents import (
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
 from app.models.user_output import UserOutput
-from app.schemas.A2A import HILCheckpoint, ReviewResult
+from app.schemas.A2A import HILCheckpoint, ModelerToCoder
 from app.schemas.enums import HILAction
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage, TaskStatusMessage, HILCheckpointMessage
@@ -21,7 +23,7 @@ from app.services.redis_manager import redis_manager
 from app.tools.interpreter_factory import create_interpreter
 from app.tools.notebook_serializer import NotebookSerializer
 from app.tools.openalex_scholar import OpenAlexScholar
-from app.utils.common_utils import create_work_dir, get_config_template
+from app.utils.common_utils import create_work_dir, find_work_dir, get_config_template
 from app.utils.log_util import logger
 
 
@@ -56,6 +58,30 @@ class MathModelWorkFlow(WorkFlow):
     feedback_enabled: bool = True
     feedback_iteration: int = 0
     max_feedback_iterations: int = 3
+
+    def _checkpoint_path(self) -> str:
+        """获取 checkpoint 文件路径。"""
+        return os.path.join(self.work_dir, "checkpoint.json")
+
+    def _save_checkpoint(self, data: dict) -> None:
+        """保存断点续传 checkpoint。"""
+        try:
+            with open(self._checkpoint_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"保存 checkpoint 失败: {e}")
+
+    def _load_checkpoint(self) -> dict | None:
+        """读取断点续传 checkpoint，不存在或损坏时返回 None。"""
+        path = self._checkpoint_path()
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"读取 checkpoint 失败: {e}")
+            return None
 
     async def _check_cancelled(self) -> None:
         """检查是否收到取消信号，若已取消则发布通知并抛出 CancelledError。"""
@@ -163,7 +189,14 @@ class MathModelWorkFlow(WorkFlow):
             problem: 包含题目信息、模板配置等的 Problem 对象。
         """
         self.task_id = problem.task_id
-        self.work_dir = create_work_dir(self.task_id)
+        # 优先复用已有工作目录（断点续传场景），否则创建新目录
+        existing_dir = find_work_dir(self.task_id)
+        if existing_dir is not None:
+            self.work_dir = existing_dir
+            logger.info(f"复用已有工作目录: {self.work_dir}")
+        else:
+            self.work_dir = create_work_dir(self.task_id)
+        self.ques_all = problem.ques_all
         self.hil_enabled = settings.HIL_ENABLED
         self.hil_checkpoints = settings.HIL_CHECKPOINTS
         self.feedback_enabled = settings.FEEDBACK_ENABLED
@@ -209,85 +242,109 @@ class MathModelWorkFlow(WorkFlow):
 
         await self._publish_status("running", 5, "init", "初始化完成")
 
-        # ========== 阶段 1: 问题拆解 ==========
-        await redis_manager.publish_message(
-            self.task_id,
-            SystemMessage(content="阶段 1/6：协调者正在分析题目、拆解子问题..."),
-        )
-        await self._check_cancelled()
-
-        try:
-            coordinator_response = await coordinator_agent.run(problem.ques_all)
-            self.questions = coordinator_response.questions
-            self.ques_count = coordinator_response.ques_count
-        except Exception as e:
-            logger.error(f"CoordinatorAgent 执行失败: {e}")
-            raise
-
-        await self._publish_status("running", 10, "coordinator", f"问题拆解完成，共 {self.ques_count} 个子问题")
-
-        # HIL 检查点：问题拆解确认
-        if self.hil_checkpoints.get("problem_split", False):
-            checkpoint = HILCheckpoint(
-                checkpoint_id=f"{self.task_id}_problem_split",
-                stage="problem_split",
-                content={"questions": self.questions, "ques_count": self.ques_count},
+        # ========== 断点续传：尝试加载 checkpoint ==========
+        checkpoint = self._load_checkpoint()
+        restored = False
+        if checkpoint and checkpoint.get("questions") and checkpoint.get("modeler_solution"):
+            logger.info(f"检测到 checkpoint，从断点恢复任务 {self.task_id}")
+            restored = True
+            self.questions = checkpoint["questions"]
+            self.ques_count = checkpoint.get("ques_count", 0)
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=f"检测到未完成任务，从断点恢复（已完成 {len(checkpoint.get('completed_flows', []))} 个子问题）...",
+                    type="warning",
+                ),
             )
-            checkpoint = await self._wait_hil_decision(checkpoint)
-            if checkpoint.action == HILAction.ABORT:
-                raise asyncio.CancelledError("用户中止任务")
-            if checkpoint.action == HILAction.EDIT and checkpoint.content:
-                self.questions = checkpoint.content.get("questions", self.questions)
-                self.ques_count = checkpoint.content.get("ques_count", self.ques_count)
+            await self._publish_status("running", 20, "modeler", "从断点恢复建模方案")
+
+        # ========== 阶段 1: 问题拆解 ==========
+        if not restored:
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content="阶段 1/6：协调者正在分析题目、拆解子问题..."),
+            )
+            await self._check_cancelled()
+
+            try:
+                coordinator_response = await coordinator_agent.run(problem.ques_all)
+                self.questions = coordinator_response.questions
+                self.ques_count = coordinator_response.ques_count
+            except Exception as e:
+                logger.error(f"CoordinatorAgent 执行失败: {e}")
+                raise
+
+            await self._publish_status("running", 10, "coordinator", f"问题拆解完成，共 {self.ques_count} 个子问题")
+
+            # HIL 检查点：问题拆解确认
+            if self.hil_checkpoints.get("problem_split", False):
+                checkpoint = HILCheckpoint(
+                    checkpoint_id=f"{self.task_id}_problem_split",
+                    stage="problem_split",
+                    content={"questions": self.questions, "ques_count": self.ques_count},
+                )
+                checkpoint = await self._wait_hil_decision(checkpoint)
+                if checkpoint.action == HILAction.ABORT:
+                    raise asyncio.CancelledError("用户中止任务")
+                if checkpoint.action == HILAction.EDIT and checkpoint.content:
+                    self.questions = checkpoint.content.get("questions", self.questions)
+                    self.ques_count = checkpoint.content.get("ques_count", self.ques_count)
 
         # ========== 阶段 2: 建模设计 ==========
-        await redis_manager.publish_message(
-            self.task_id,
-            SystemMessage(content="阶段 2/6：建模手正在设计建模方案..."),
-        )
-        await self._check_cancelled()
-
-        modeler_response = await modeler_agent.run(coordinator_response)
-
-        await self._publish_status("running", 20, "modeler", "建模方案设计完成")
-
-        # HIL 检查点：模型选择确认
-        if self.hil_checkpoints.get("model_selection", False):
-            checkpoint = HILCheckpoint(
-                checkpoint_id=f"{self.task_id}_model_selection",
-                stage="model_selection",
-                content={"solutions": modeler_response.questions_solution},
+        if not restored:
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content="阶段 2/6：建模手正在设计建模方案..."),
             )
-            checkpoint = await self._wait_hil_decision(checkpoint)
-            if checkpoint.action == HILAction.ABORT:
-                raise asyncio.CancelledError("用户中止任务")
-            if checkpoint.action == HILAction.REGENERATE:
-                # 重新生成建模方案
-                modeler_response = await modeler_agent.run(coordinator_response)
+            await self._check_cancelled()
 
-        # 评审建模方案
-        if self.feedback_enabled:
-            review_result = await reviewer_agent.review_modeling(
-                self.questions, modeler_response.questions_solution
+            modeler_response = await modeler_agent.run(coordinator_response)
+
+            await self._publish_status("running", 20, "modeler", "建模方案设计完成")
+
+            # HIL 检查点：模型选择确认
+            if self.hil_checkpoints.get("model_selection", False):
+                checkpoint = HILCheckpoint(
+                    checkpoint_id=f"{self.task_id}_model_selection",
+                    stage="model_selection",
+                    content={"solutions": modeler_response.questions_solution},
+                )
+                checkpoint = await self._wait_hil_decision(checkpoint)
+                if checkpoint.action == HILAction.ABORT:
+                    raise asyncio.CancelledError("用户中止任务")
+                if checkpoint.action == HILAction.REGENERATE:
+                    # 重新生成建模方案
+                    modeler_response = await modeler_agent.run(coordinator_response)
+
+            # 评审建模方案
+            if self.feedback_enabled:
+                review_result = await reviewer_agent.review_modeling(
+                    self.questions, modeler_response.questions_solution
+                )
+                if review_result.needs_revision and self.feedback_iteration < self.max_feedback_iterations:
+                    self.feedback_iteration += 1
+                    logger.info(f"建模方案需要修改 (第{self.feedback_iteration}次反馈): {review_result.feedback}")
+                    await redis_manager.publish_message(
+                        self.task_id,
+                        SystemMessage(
+                            content=f"建模方案评审得分 {review_result.score}/10，正在根据反馈重新生成...",
+                            type="warning",
+                        ),
+                    )
+                    feedback_prompt = (
+                        f"评审得分：{review_result.score}/10\n"
+                        f"反馈：{review_result.feedback}\n"
+                        f"改进建议：{'；'.join(review_result.suggestions)}"
+                    )
+                    modeler_response = await modeler_agent.run(
+                        coordinator_response, feedback=feedback_prompt
+                    )
+        else:
+            # 从 checkpoint 恢复建模方案
+            modeler_response = ModelerToCoder(
+                questions_solution=checkpoint["modeler_solution"]
             )
-            if review_result.needs_revision and self.feedback_iteration < self.max_feedback_iterations:
-                self.feedback_iteration += 1
-                logger.info(f"建模方案需要修改 (第{self.feedback_iteration}次反馈): {review_result.feedback}")
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(
-                        content=f"建模方案评审得分 {review_result.score}/10，正在根据反馈重新生成...",
-                        type="warning",
-                    ),
-                )
-                feedback_prompt = (
-                    f"评审得分：{review_result.score}/10\n"
-                    f"反馈：{review_result.feedback}\n"
-                    f"改进建议：{'；'.join(review_result.suggestions)}"
-                )
-                modeler_response = await modeler_agent.run(
-                    coordinator_response, feedback=feedback_prompt
-                )
 
         # ========== 阶段 3: 初始化环境 ==========
         await redis_manager.publish_message(
@@ -295,7 +352,13 @@ class MathModelWorkFlow(WorkFlow):
             SystemMessage(content="阶段 3/6：正在创建代码沙盒环境..."),
         )
 
-        user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
+        if restored:
+            user_output = UserOutput.from_dict(
+                self.work_dir, checkpoint.get("user_output", {})
+            )
+        else:
+            user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
+
         notebook_serializer = NotebookSerializer(work_dir=self.work_dir)
         self.code_interpreter = await create_interpreter(
             kind=settings.CODE_INTERPRETER_KIND,
@@ -305,6 +368,17 @@ class MathModelWorkFlow(WorkFlow):
             timeout=3000,
         )
         code_interpreter = self.code_interpreter
+
+        # 断点恢复时，将已存在的图片设为基线，避免重复引用
+        if restored:
+            image_exts = (".png", ".jpg", ".jpeg", ".svg")
+            existing_images: set[str] = set()
+            for root, _, filenames in os.walk(self.work_dir):
+                for f in filenames:
+                    if f.lower().endswith(image_exts):
+                        rel = os.path.relpath(os.path.join(root, f), self.work_dir).replace(os.sep, "/")
+                        existing_images.add(rel)
+            code_interpreter.set_image_baseline(existing_images)
 
         scholar = None
         if settings.OPENALEX_EMAIL:
@@ -338,11 +412,12 @@ class MathModelWorkFlow(WorkFlow):
         flows = Flows(self.questions)
         config_template = get_config_template(problem.comp_template)
 
-        await self._publish_status("running", 30, "init", "环境初始化完成")
+        await self._publish_status("running", 30, "solve", "环境初始化完成，开始求解")
 
         # ========== 阶段 4: 求解阶段 ==========
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
         total_steps = len(solution_flows)
+        completed_flows: list[str] = checkpoint.get("completed_flows", []) if restored else []
         current_step = 0
 
         await redis_manager.publish_message(
@@ -354,6 +429,11 @@ class MathModelWorkFlow(WorkFlow):
             await self._check_cancelled()
             current_step += 1
             progress = 30 + (current_step / total_steps) * 40  # 30-70%
+
+            # 断点恢复：跳过已完成的子问题
+            if restored and key in completed_flows:
+                await self._publish_status("running", progress, "solve", f"跳过已完成: {key}")
+                continue
 
             await redis_manager.publish_message(
                 self.task_id,
@@ -411,6 +491,18 @@ class MathModelWorkFlow(WorkFlow):
                     logger.info(f"论文章节需要改进: {paper_review.feedback}")
 
             user_output.set_res(key, writer_response)
+            completed_flows.append(key)
+
+            # 保存断点 checkpoint（每个子问题完成后）
+            self._save_checkpoint({
+                "questions": self.questions,
+                "ques_count": self.ques_count,
+                "ques_all": self.ques_all,
+                "modeler_solution": modeler_response.questions_solution,
+                "completed_flows": completed_flows,
+                "user_output": user_output.to_dict(),
+            })
+
             await self._publish_status("running", progress, "solve", f"完成: {key}")
 
         # 关闭沙盒
@@ -418,8 +510,12 @@ class MathModelWorkFlow(WorkFlow):
         logger.info(user_output.get_res())
 
         # ========== 阶段 5: 写作阶段 ==========
+        # 断点恢复时优先使用 checkpoint 中保存的原始题目
+        bg_ques_all = self.ques_all or problem.ques_all
+        if restored and checkpoint.get("ques_all"):
+            bg_ques_all = checkpoint["ques_all"]
         write_flows = flows.get_write_flows(
-            user_output, config_template, problem.ques_all
+            user_output, config_template, bg_ques_all
         )
         total_write = len(write_flows)
         current_write = 0
@@ -434,6 +530,11 @@ class MathModelWorkFlow(WorkFlow):
             current_write += 1
             progress = 70 + (current_write / total_write) * 20  # 70-90%
 
+            # 断点恢复：跳过已完成的章节
+            if restored and key in user_output.res:
+                await self._publish_status("running", progress, "write", f"跳过已完成: {key}")
+                continue
+
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content=f"[{current_write}/{total_write}] 写作手正在撰写: {key}"),
@@ -441,6 +542,16 @@ class MathModelWorkFlow(WorkFlow):
 
             writer_response = await writer_agent.run(prompt=value, sub_title=key)
             user_output.set_res(key, writer_response)
+
+            # 写作阶段也保存 checkpoint（幂等，覆盖写入）
+            self._save_checkpoint({
+                "questions": self.questions,
+                "ques_count": self.ques_count,
+                "ques_all": self.ques_all or problem.ques_all,
+                "modeler_solution": modeler_response.questions_solution,
+                "completed_flows": completed_flows,
+                "user_output": user_output.to_dict(),
+            })
 
             await redis_manager.publish_message(
                 self.task_id,
@@ -485,6 +596,13 @@ class MathModelWorkFlow(WorkFlow):
 
         # ========== 保存结果 ==========
         user_output.save_result()
+
+        # 任务正常完成，清理 checkpoint，避免下次误恢复
+        try:
+            if os.path.exists(self._checkpoint_path()):
+                os.remove(self._checkpoint_path())
+        except Exception as e:
+            logger.warning(f"清理 checkpoint 失败: {e}")
 
         await self._publish_status("completed", 100, "done", "任务完成")
         await redis_manager.publish_message(

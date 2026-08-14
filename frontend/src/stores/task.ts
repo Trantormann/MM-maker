@@ -23,6 +23,8 @@ export const useTaskStore = defineStore("task", () => {
     const status = ref("idle"); // idle | running | completed | error
     const currentStage = ref("");
     const pendingCheckpoint = ref<TaskMessage | null>(null);
+    const errorMessage = ref("");
+    const completedAt = ref<number | null>(null);
 
     // ---- Actions ----
     function setTaskId(taskId: string) {
@@ -44,9 +46,19 @@ export const useTaskStore = defineStore("task", () => {
         // 处理不同类型消息
         if (message.status) {
             status.value = message.status;
+            if (message.status === "completed") {
+                completedAt.value = Date.now();
+            }
+            if (message.status === "error") {
+                errorMessage.value = message.message || "任务执行失败";
+            }
+            if (message.status === "cancelled") {
+                errorMessage.value = message.message || "任务已取消";
+            }
         }
         if (message.progress !== undefined) {
-            progress.value = message.progress;
+            // 进度只增不减，避免阶段回退导致进度条倒退
+            progress.value = Math.max(progress.value, message.progress);
         }
         if (message.current_stage) {
             currentStage.value = message.current_stage;
@@ -59,6 +71,8 @@ export const useTaskStore = defineStore("task", () => {
         status.value = "idle";
         currentStage.value = "";
         pendingCheckpoint.value = null;
+        errorMessage.value = "";
+        completedAt.value = null;
     }
 
     return {
@@ -68,6 +82,8 @@ export const useTaskStore = defineStore("task", () => {
         status,
         currentStage,
         pendingCheckpoint,
+        errorMessage,
+        completedAt,
         setTaskId,
         addMessage,
         clearMessages,

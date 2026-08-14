@@ -42,6 +42,12 @@ export const modelingApi = {
         return response.data;
     },
 
+    /** 恢复中断的任务 */
+    async resumeTask(taskId: string) {
+        const response = await api.post(`/modeling/${taskId}/resume`);
+        return response.data;
+    },
+
     /** 获取任务状态 */
     async getTaskStatus(taskId: string) {
         const response = await api.get(`/modeling/${taskId}/status`);

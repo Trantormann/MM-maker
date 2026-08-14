@@ -13,7 +13,7 @@ from app.schemas.enums import CompTemplate, FormatOutPut
 from app.schemas.request import HILDecisionRequest, Problem
 from app.schemas.response import SystemMessage
 from app.services.redis_manager import redis_manager
-from app.utils.common_utils import create_task_id, create_work_dir, get_current_files, md_2_docx
+from app.utils.common_utils import create_task_id, create_work_dir, find_work_dir, get_current_files, md_2_docx
 from app.utils.log_util import logger
 
 router = APIRouter()
@@ -174,47 +174,16 @@ async def validate_api_key(request: ValidateApiKeyRequest):
         return ValidateApiKeyResponse(valid=False, message=f"验证失败: {str(e)}")
 
 
-@router.post("/modeling")
-async def start_modeling(
-    background_tasks: BackgroundTasks,
-    ques_all: str = Form(...),
-    comp_template: str = Form("CHINA"),
-    format_output: str = Form("Markdown"),
-    files: list[UploadFile] = File(default=[]),
-):
-    """启动数学建模任务。
+def _launch_task(task_id: str, problem: Problem) -> dict:
+    """在后台启动工作流任务，并注册到 _active_tasks。
 
     Args:
-        ques_all: 完整题目信息。
-        comp_template: 竞赛模板。
-        format_output: 输出格式。
-        files: 上传的数据文件。
+        task_id: 任务 ID。
+        problem: Problem 对象。
 
     Returns:
-        任务 ID 和工作目录。
+        启动信息字典。
     """
-    task_id = create_task_id()
-    work_dir = create_work_dir(task_id)
-
-    # 保存上传的文件
-    data_dir = os.path.join(work_dir, "data")
-    os.makedirs(data_dir, exist_ok=True)
-    for file in files:
-        if file.filename:
-            file_path = os.path.join(data_dir, file.filename)
-            with open(file_path, "wb") as f:
-                content = await file.read()
-                f.write(content)
-
-    # 创建 Problem 对象
-    problem = Problem(
-        task_id=task_id,
-        ques_all=ques_all,
-        comp_template=CompTemplate(comp_template),
-        format_output=FormatOutPut(format_output),
-    )
-
-    # 创建工作流实例
     workflow = MathModelWorkFlow()
     cancel_event = asyncio.Event()
     workflow.cancel_event = cancel_event
@@ -257,14 +226,83 @@ async def start_modeling(
     # 在后台执行任务
     task = asyncio.create_task(_run_and_finalize())
     _active_tasks[task_id] = (task, cancel_event, workflow)
+    logger.info(f"任务 {task_id} 已启动")
 
-    logger.info(f"任务 {task_id} 已启动，工作目录: {work_dir}")
+    return {"task_id": task_id, "work_dir": workflow.work_dir, "message": "任务已启动"}
 
-    return {
-        "task_id": task_id,
-        "work_dir": work_dir,
-        "message": "任务已启动",
-    }
+
+@router.post("/modeling")
+async def start_modeling(
+    background_tasks: BackgroundTasks,
+    ques_all: str = Form(...),
+    comp_template: str = Form("CHINA"),
+    format_output: str = Form("Markdown"),
+    files: list[UploadFile] = File(default=[]),
+):
+    """启动数学建模任务。
+
+    Args:
+        ques_all: 完整题目信息。
+        comp_template: 竞赛模板。
+        format_output: 输出格式。
+        files: 上传的数据文件。
+
+    Returns:
+        任务 ID 和工作目录。
+    """
+    task_id = create_task_id()
+    work_dir = create_work_dir(task_id)
+
+    # 保存上传的文件
+    data_dir = os.path.join(work_dir, "data")
+    os.makedirs(data_dir, exist_ok=True)
+    for file in files:
+        if file.filename:
+            file_path = os.path.join(data_dir, file.filename)
+            with open(file_path, "wb") as f:
+                content = await file.read()
+                f.write(content)
+
+    # 创建 Problem 对象
+    problem = Problem(
+        task_id=task_id,
+        ques_all=ques_all,
+        comp_template=CompTemplate(comp_template),
+        format_output=FormatOutPut(format_output),
+    )
+
+    return _launch_task(task_id, problem)
+
+
+@router.post("/modeling/{task_id}/resume")
+async def resume_modeling(task_id: str):
+    """从中断点恢复未完成的任务。
+
+    通过工作目录下的 checkpoint.json 恢复问题拆解、建模方案与
+    已完成子问题的论文章节，跳过已完成部分继续执行。
+    """
+    if task_id in _active_tasks:
+        raise HTTPException(status_code=409, detail="任务正在运行中")
+
+    work_dir = find_work_dir(task_id)
+    if work_dir is None:
+        raise HTTPException(status_code=404, detail="任务工作目录不存在")
+
+    checkpoint_path = os.path.join(work_dir, "checkpoint.json")
+    if not os.path.exists(checkpoint_path):
+        raise HTTPException(status_code=409, detail="任务无断点信息（可能已完成或未开始求解）")
+
+    # 恢复时需从工作目录重建 Problem 上下文
+    # 题目原文与模板信息无法从 checkpoint 完全还原，这里使用占位恢复，
+    # 工作流会优先读取 checkpoint 中的 questions 和 modeler_solution。
+    problem = Problem(
+        task_id=task_id,
+        ques_all="",
+        comp_template=CompTemplate.CHINA,
+        format_output=FormatOutPut.Markdown,
+    )
+
+    return _launch_task(task_id, problem)
 
 
 @router.post("/modeling/{task_id}/cancel")
