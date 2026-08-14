@@ -158,6 +158,61 @@ class ReviewerAgent(Agent):
 """
         return await self._do_review(prompt, "full_paper")
 
+    # review_type -> 嵌套 JSON 中可能的 key 关键词（按优先级）
+    _REVIEW_TYPE_KEYWORDS: dict[str, list[str]] = {
+        "modeling": ["建模方案", "建模", "模型方案"],
+        "code_result": ["代码结果", "代码", "结果"],
+        "paper": ["论文章节", "论文", "章节"],
+        "full_paper": ["完整论文", "整篇论文", "全文", "论文"],
+    }
+
+    @staticmethod
+    def _extract_review_data(result_data, review_type: str = "") -> dict:
+        """从评审结果中提取字段，兼容嵌套输出结构。
+
+        评审手有时会输出 ``{"建模方案评审": {...}, "代码结果评审": {...}}``
+        之类的嵌套 JSON，导致顶层取不到 score 字段而 fallback 到默认 5.0，
+        真实评分被丢失。此方法优先返回顶层字段；嵌套时按 review_type
+        关键词匹配对应子字典，避免取错评审对象。
+        """
+        if not isinstance(result_data, dict):
+            return {}
+
+        # 顶层直接包含 score，直接返回
+        if "score" in result_data:
+            return result_data
+
+        # 收集所有含 score 的子字典
+        candidates: list[tuple[str, dict]] = [
+            (key, value)
+            for key, value in result_data.items()
+            if isinstance(value, dict) and "score" in value
+        ]
+
+        if not candidates:
+            return {}
+
+        # 按 review_type 关键词匹配
+        keywords = ReviewerAgent._REVIEW_TYPE_KEYWORDS.get(review_type, [])
+        for keyword in keywords:
+            for key, value in candidates:
+                if keyword in key:
+                    return value
+
+        # 无法精确匹配时，取第一个含 score 的子字典
+        return candidates[0][1]
+
+    @staticmethod
+    def _normalize_str_list(value) -> list[str]:
+        """将字段值规范化为字符串列表，兼容 LLM 返回单字符串的情况。"""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        return [str(value)]
+
     async def _do_review(self, prompt: str, review_type: str) -> ReviewResult:
         """执行评审并解析结果。
 
@@ -193,14 +248,27 @@ class ReviewerAgent(Agent):
                 json_str = json_str.replace("```json", "").replace("```", "").strip()
 
                 result_data = json.loads(json_str)
+                review_data = self._extract_review_data(result_data, review_type)
+
+                try:
+                    score = float(review_data.get("score", 5.0))
+                except (TypeError, ValueError):
+                    score = 5.0
+                try:
+                    dimension_scores = {
+                        str(k): float(v)
+                        for k, v in (review_data.get("dimension_scores") or {}).items()
+                    }
+                except (TypeError, ValueError, AttributeError):
+                    dimension_scores = {}
 
                 result = ReviewResult(
-                    score=result_data.get("score", 5.0),
-                    dimension_scores=result_data.get("dimension_scores", {}),
-                    feedback=result_data.get("feedback", ""),
-                    suggestions=result_data.get("suggestions", []),
-                    needs_revision=result_data.get("needs_revision", True),
-                    revision_areas=result_data.get("revision_areas", []),
+                    score=score,
+                    dimension_scores=dimension_scores,
+                    feedback=str(review_data.get("feedback", "")),
+                    suggestions=self._normalize_str_list(review_data.get("suggestions")),
+                    needs_revision=bool(review_data.get("needs_revision", True)),
+                    revision_areas=self._normalize_str_list(review_data.get("revision_areas")),
                 )
 
                 await redis_manager.publish_message(
@@ -213,7 +281,7 @@ class ReviewerAgent(Agent):
 
                 return result
 
-            except (json.JSONDecodeError, KeyError) as e:
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
                 attempt += 1
                 logger.warning(
                     f"ReviewerAgent JSON 解析失败 (尝试 {attempt}/{MAX_JSON_RETRIES}): {e}"

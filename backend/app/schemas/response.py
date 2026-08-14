@@ -57,10 +57,16 @@ class ResultModel(OutputItem):
     res_type: str = "result"
 
 
-class StdErrModel(BaseModel):
-    """错误输出。"""
+class StdErrModel(OutputItem):
+    """错误输出。
 
-    msg: str
+    继承 OutputItem 以兼容 InterpreterMessage.output 的 list[OutputItem] 类型，
+    否则代码执行出错时构造 InterpreterMessage 会抛 pydantic ValidationError，
+    导致真实错误信息被覆盖，代码手无法据此修复。
+    """
+
+    res_type: str = "stderr"
+    format: str = "text"
 
 
 class InterpreterMessage(BaseModel):

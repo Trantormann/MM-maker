@@ -53,6 +53,9 @@ class CoderAgent(Agent):
         assert self.code_interpreter is not None, "code_interpreter 未初始化"
         self.code_interpreter.add_section(subtask_title)
 
+        # 每个子任务独立计算对话轮次，避免前序子任务耗尽全局轮次预算
+        self.current_chat_turns = 0
+
         # 根据 api_type 选择 tools 格式
         api_type = self.model.api_type
         tools = coder_tools_anthropic if api_type == ApiType.ANTHROPIC else coder_tools
