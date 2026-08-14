@@ -89,14 +89,14 @@ docker run -d -p 6379:6379 redis:alpine
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+.\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 ```
 
 **macOS / Linux**：
 
 ```bash
 cd backend
-.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 ```
 
 ### 启动前端

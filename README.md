@@ -75,7 +75,7 @@ Copy-Item .env.example .env.dev   # 创建配置文件，并编辑填写 API Key
 python -m venv .venv              # 创建虚拟环境
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt   # 安装 Python 依赖
 .\.venv\Scripts\python.exe -m ipykernel install --user --name mmmaker --display-name "MMmaker Python 3"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+.\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
 # 前端（另开一个终端）
 cd frontend
@@ -95,7 +95,7 @@ cp .env.example .env.dev        # 创建配置文件，并编辑填写 API Key �
 python3 -m venv .venv           # 创建虚拟环境
 .venv/bin/python -m pip install -r requirements.txt   # 安装 Python 依赖
 .venv/bin/python -m ipykernel install --user --name mmmaker --display-name "MMmaker Python 3"
-.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
 # 前端（另开一个终端）
 cd frontend

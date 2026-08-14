@@ -190,7 +190,10 @@ else {
 Write-Step "6/6 启动服务"
 
 # 启动后端（独立窗口）
-$backendCmd = ".\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+# 注意：--reload 必须配合 --reload-dir app 只监控源码目录，
+# 否则任务运行时 .venv 编译产物、project/work_dir 输出文件的变化
+# 会触发热重载，杀死正在执行的任务和 Jupyter 内核。
+$backendCmd = ".\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd -WorkingDirectory $BackendDir
 Write-Host "  后端已启动（http://localhost:8000）  OK"
 
