@@ -1,7 +1,9 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHashHistory } from "vue-router";
 
 const router = createRouter({
-    history: createWebHistory(),
+    // hash 模式：生产环境由 FastAPI 单进程托管静态文件时，
+    // 刷新 /task/xxx 等子路由不会因后端无对应路由而 404。
+    history: createWebHashHistory(),
     routes: [
         {
             path: "/",

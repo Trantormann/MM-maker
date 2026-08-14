@@ -1,7 +1,9 @@
 import axios from "axios";
 
 const api = axios.create({
-    baseURL: "/api",
+    // 同源直连后端（生产环境由 FastAPI 单进程托管前端静态文件）。
+    // 开发模式由 vite 代理转发到后端。
+    baseURL: "",
     timeout: 30000,
 });
 

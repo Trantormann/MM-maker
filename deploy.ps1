@@ -135,12 +135,14 @@ if (-not $SkipInstall) {
 }
 
 # ---------------------------------------------------------------------------
-# 4. 前端依赖
+# 4. 前端依赖 + 构建静态产物
 # ---------------------------------------------------------------------------
-if (-not $SkipInstall) {
-    Write-Step "4/6 安装前端依赖"
+Write-Step "4/6 构建前端"
 
-    Push-Location $FrontendDir
+$frontendDist = Join-Path $BackendDir "frontend_dist"
+
+Push-Location $FrontendDir
+if (-not $SkipInstall) {
     if (-not (Test-Path (Join-Path $FrontendDir "node_modules/.bin/vite"))) {
         Write-Host "  安装 npm 依赖..."
         & pnpm install
@@ -152,8 +154,28 @@ if (-not $SkipInstall) {
     else {
         Write-Host "  前端依赖已存在，跳过安装"
     }
+}
+
+# 构建前端为静态文件（单进程部署，无需单独运行 dev server）
+Write-Host "  构建前端静态文件..."
+& pnpm run build
+if ($LASTEXITCODE -ne 0) {
     Pop-Location
-    Write-Host "  前端依赖安装完成  OK"
+    Write-Error "前端构建失败"
+}
+Pop-Location
+
+# 将构建产物复制到后端目录下的 frontend_dist，供后端单进程托管
+$distDir = Join-Path $FrontendDir "dist"
+if (Test-Path $distDir) {
+    if (Test-Path $frontendDist) {
+        Remove-Item $frontendDist -Recurse -Force
+    }
+    Copy-Item $distDir $frontendDist -Recurse -Force
+    Write-Host "  前端已构建并复制到 backend\frontend_dist  OK"
+}
+else {
+    Write-Error "前端构建产物 dist 不存在"
 }
 
 # ---------------------------------------------------------------------------
@@ -185,34 +207,30 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# 6. 启动服务
+# 6. 启动服务（单进程：后端托管前端静态文件）
 # ---------------------------------------------------------------------------
 Write-Step "6/6 启动服务"
 
-# 启动后端（独立窗口）
+# 启动后端（独立窗口）。
+# 单进程部署：前端已构建为 frontend_dist，由后端直接托管，
+# 无需再单独运行前端 dev server。
 # 注意：--reload 必须配合 --reload-dir app 只监控源码目录，
 # 否则任务运行时 .venv 编译产物、project/work_dir 输出文件的变化
 # 会触发热重载，杀死正在执行的任务和 Jupyter 内核。
 $backendCmd = ".\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd -WorkingDirectory $BackendDir
-Write-Host "  后端已启动（http://localhost:8000）  OK"
-
-# 启动前端（独立窗口）
-$frontendCmd = "pnpm run dev"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd -WorkingDirectory $FrontendDir
-Write-Host "  前端已启动（http://localhost:5173）  OK"
+Write-Host "  后端已启动（http://localhost:8000，前端与 API 同源）  OK"
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Green
 Write-Host "  MMmaker 部署完成！" -ForegroundColor Green
-Write-Host "  前端界面：http://localhost:5173" -ForegroundColor Green
-Write-Host "  后端 API：http://localhost:8000" -ForegroundColor Green
+Write-Host "  打开浏览器访问：http://localhost:8000" -ForegroundColor Green
 Write-Host "  API 文档：http://localhost:8000/docs" -ForegroundColor Green
 Write-Host "================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  下一步：" -ForegroundColor Yellow
-Write-Host "  1. 打开 http://localhost:5173" -ForegroundColor Yellow
+Write-Host "  1. 打开 http://localhost:8000" -ForegroundColor Yellow
 Write-Host "  2. 进入「设置」页面，配置各智能体的 API Key 和模型" -ForegroundColor Yellow
 Write-Host "  3. 返回首页，选择竞赛类型，粘贴题目，开始建模" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  停止服务：关闭两个终端窗口，或运行 .\deploy.ps1 -Stop" -ForegroundColor Gray
+Write-Host "  停止服务：关闭后端终端窗口，或运行 .\deploy.ps1 -Stop" -ForegroundColor Gray

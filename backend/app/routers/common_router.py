@@ -9,13 +9,3 @@ router = APIRouter()
 async def health_check():
     """健康检查接口。"""
     return {"status": "healthy", "service": "MMmaker"}
-
-
-@router.get("/")
-async def root():
-    """根路径。"""
-    return {
-        "name": "MMmaker",
-        "version": "0.1.0",
-        "description": "国奖级数学建模竞赛自动化系统",
-    }

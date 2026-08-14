@@ -20,6 +20,7 @@ logs/
 
 # 生成文件
 project/work_dir/
+backend/frontend_dist/
 
 # 前端
 frontend/node_modules/
