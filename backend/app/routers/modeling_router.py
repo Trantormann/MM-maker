@@ -174,12 +174,13 @@ async def validate_api_key(request: ValidateApiKeyRequest):
         return ValidateApiKeyResponse(valid=False, message=f"验证失败: {str(e)}")
 
 
-def _launch_task(task_id: str, problem: Problem) -> dict:
+def _launch_task(task_id: str, problem: Problem, work_dir: str | None = None) -> dict:
     """在后台启动工作流任务，并注册到 _active_tasks。
 
     Args:
         task_id: 任务 ID。
         problem: Problem 对象。
+        work_dir: 工作目录路径（由调用方预先确定，避免后台任务竞态）。
 
     Returns:
         启动信息字典。
@@ -187,6 +188,8 @@ def _launch_task(task_id: str, problem: Problem) -> dict:
     workflow = MathModelWorkFlow()
     cancel_event = asyncio.Event()
     workflow.cancel_event = cancel_event
+    if work_dir:
+        workflow.work_dir = work_dir
 
     async def _run_and_finalize():
         """执行工作流并在结束后统一清理：记录状态、回收资源、移除注册表。"""
@@ -271,7 +274,7 @@ async def start_modeling(
         format_output=FormatOutPut(format_output),
     )
 
-    return _launch_task(task_id, problem)
+    return _launch_task(task_id, problem, work_dir)
 
 
 @router.post("/modeling/{task_id}/resume")
@@ -302,7 +305,7 @@ async def resume_modeling(task_id: str):
         format_output=FormatOutPut.Markdown,
     )
 
-    return _launch_task(task_id, problem)
+    return _launch_task(task_id, problem, work_dir)
 
 
 @router.post("/modeling/{task_id}/cancel")

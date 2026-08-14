@@ -42,7 +42,7 @@ class MathModelWorkFlow(WorkFlow):
     """数学建模工作流，协调协调者、建模手、代码手、写作手和评审手完成完整建模任务。"""
 
     task_id: str
-    work_dir: str
+    work_dir: str = ""
     ques_count: int = 0
     questions: dict[str, str | int] = {}
     cancel_event: asyncio.Event | None = None
@@ -189,13 +189,14 @@ class MathModelWorkFlow(WorkFlow):
             problem: 包含题目信息、模板配置等的 Problem 对象。
         """
         self.task_id = problem.task_id
-        # 优先复用已有工作目录（断点续传场景），否则创建新目录
-        existing_dir = find_work_dir(self.task_id)
-        if existing_dir is not None:
-            self.work_dir = existing_dir
-            logger.info(f"复用已有工作目录: {self.work_dir}")
-        else:
-            self.work_dir = create_work_dir(self.task_id)
+        # 优先复用路由预设的工作目录；否则查找已有目录（断点续传），最后才创建新目录
+        if not self.work_dir:
+            existing_dir = find_work_dir(self.task_id)
+            if existing_dir is not None:
+                self.work_dir = existing_dir
+                logger.info(f"复用已有工作目录: {self.work_dir}")
+            else:
+                self.work_dir = create_work_dir(self.task_id)
         self.ques_all = problem.ques_all
         self.hil_enabled = settings.HIL_ENABLED
         self.hil_checkpoints = settings.HIL_CHECKPOINTS
