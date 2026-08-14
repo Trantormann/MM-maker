@@ -35,8 +35,18 @@ def get_current_files(work_dir: str, subdir: str = "data") -> str:
     return "\n".join(files) if files else "无文件"
 
 
-def get_config_template(comp_template: str) -> dict:
-    """获取竞赛模板配置。"""
+def get_config_template(comp_template) -> dict:
+    """获取竞赛模板配置。
+
+    Args:
+        comp_template: 竞赛模板（CompTemplate 枚举或字符串）。
+
+    Returns:
+        模板配置字典。
+    """
+    # 兼容枚举与字符串两种入参
+    if hasattr(comp_template, "value"):
+        comp_template = comp_template.value
     templates = {
         "CHINA": {
             "name": "全国大学生数学建模竞赛",
@@ -50,6 +60,11 @@ def get_config_template(comp_template: str) -> dict:
         },
         "HUAWEI": {
             "name": "华为杯研究生数学建模竞赛",
+            "language": "中文",
+            "sections": ["摘要", "问题重述", "问题分析", "模型假设", "符号说明", "模型建立与求解", "敏感性分析", "模型评价", "参考文献"],
+        },
+        "HUASHU": {
+            "name": "华数杯数学建模竞赛",
             "language": "中文",
             "sections": ["摘要", "问题重述", "问题分析", "模型假设", "符号说明", "模型建立与求解", "敏感性分析", "模型评价", "参考文献"],
         },

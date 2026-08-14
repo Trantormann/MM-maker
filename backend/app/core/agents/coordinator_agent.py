@@ -83,8 +83,8 @@ class CoordinatorAgent(Agent):
 
                 error_prompt = f"⚠️ 上次响应格式错误: {str(e)}。请严格输出JSON格式"
                 await self.append_chat_history({
-                    "role": "system",
-                    "content": self.system_prompt + "\n" + error_prompt,
+                    "role": "user",
+                    "content": error_prompt,
                 })
 
         raise last_error or ValueError("CoordinatorAgent JSON 解析重试次数耗尽")

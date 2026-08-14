@@ -7,7 +7,7 @@ from typing import Dict, Tuple
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.config.setting import settings
+from app.config.setting import ApiType, settings
 from app.core.workflow import MathModelWorkFlow
 from app.schemas.enums import CompTemplate, FormatOutPut
 from app.schemas.request import HILDecisionRequest, Problem
@@ -49,57 +49,107 @@ class SaveApiConfigRequest(BaseModel):
     openalex_email: str
 
 
+def _parse_api_type(value) -> ApiType | None:
+    """将前端传入的字符串安全转换为 ApiType 枚举。"""
+    if not value:
+        return None
+    if isinstance(value, ApiType):
+        return value
+    try:
+        return ApiType(str(value))
+    except ValueError:
+        return None
+
+
+def _persist_env_updates(updates: dict[str, str]) -> None:
+    """将配置写回 .env.dev 文件，保留原有注释和未涉及的键。
+
+    已存在的键原地更新，不存在的键追加到文件末尾。
+    使用 UTF-8（无 BOM）写入，与 pydantic-settings 的读取编码一致。
+    """
+    env_path = "backend/.env.dev"
+    if not os.path.exists(env_path):
+        env_path = ".env.dev"
+    if not os.path.exists(env_path):
+        logger.warning("未找到 .env.dev，跳过配置持久化")
+        return
+
+    with open(env_path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+
+    seen: set[str] = set()
+    updated_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            updated_lines.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in updates:
+            updated_lines.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            updated_lines.append(line)
+
+    # 追加未出现在文件中的键
+    for key, value in updates.items():
+        if key not in seen:
+            updated_lines.append(f"{key}={value}")
+
+    with open(env_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(updated_lines) + "\n")
+    logger.info(f"配置已持久化到 {env_path}")
+
+
 @router.post("/save-api-config")
 async def save_api_config(request: SaveApiConfigRequest):
-    """保存验证成功的 API 配置到 settings。"""
+    """保存验证成功的 API 配置到 settings，并持久化到 .env.dev。"""
     try:
-        if request.coordinator:
-            settings.COORDINATOR_API_KEY = request.coordinator.get("apiKey", "")
-            settings.COORDINATOR_MODEL = request.coordinator.get("modelId", "")
-            settings.COORDINATOR_BASE_URL = request.coordinator.get("baseUrl", "")
-            if api_type := request.coordinator.get("apiType"):
-                settings.COORDINATOR_API_TYPE = api_type
-            if cw := request.coordinator.get("contextWindow"):
-                settings.COORDINATOR_CONTEXT_WINDOW = int(cw)
+        updates: dict[str, str] = {}
 
-        if request.modeler:
-            settings.MODELER_API_KEY = request.modeler.get("apiKey", "")
-            settings.MODELER_MODEL = request.modeler.get("modelId", "")
-            settings.MODELER_BASE_URL = request.modeler.get("baseUrl", "")
-            if api_type := request.modeler.get("apiType"):
-                settings.MODELER_API_TYPE = api_type
-            if cw := request.modeler.get("contextWindow"):
-                settings.MODELER_CONTEXT_WINDOW = int(cw)
+        def _apply(prefix: str, config: dict) -> None:
+            """将单个 Agent 的配置写入 settings 并收集持久化项。"""
+            if not config:
+                return
+            key_map = {
+                "apiKey": f"{prefix}_API_KEY",
+                "modelId": f"{prefix}_MODEL",
+                "baseUrl": f"{prefix}_BASE_URL",
+                "apiType": f"{prefix}_API_TYPE",
+                "contextWindow": f"{prefix}_CONTEXT_WINDOW",
+            }
+            for field, env_key in key_map.items():
+                value = config.get(field)
+                if value in (None, ""):
+                    continue
+                if field == "apiType":
+                    parsed = _parse_api_type(value)
+                    if parsed is not None:
+                        setattr(settings, env_key, parsed)
+                        updates[env_key] = parsed.value
+                elif field == "contextWindow":
+                    int_val = int(value)
+                    setattr(settings, env_key, int_val)
+                    updates[env_key] = str(int_val)
+                else:
+                    setattr(settings, env_key, value)
+                    updates[env_key] = value
 
-        if request.coder:
-            settings.CODER_API_KEY = request.coder.get("apiKey", "")
-            settings.CODER_MODEL = request.coder.get("modelId", "")
-            settings.CODER_BASE_URL = request.coder.get("baseUrl", "")
-            if api_type := request.coder.get("apiType"):
-                settings.CODER_API_TYPE = api_type
-            if cw := request.coder.get("contextWindow"):
-                settings.CODER_CONTEXT_WINDOW = int(cw)
-
-        if request.writer:
-            settings.WRITER_API_KEY = request.writer.get("apiKey", "")
-            settings.WRITER_MODEL = request.writer.get("modelId", "")
-            settings.WRITER_BASE_URL = request.writer.get("baseUrl", "")
-            if api_type := request.writer.get("apiType"):
-                settings.WRITER_API_TYPE = api_type
-            if cw := request.writer.get("contextWindow"):
-                settings.WRITER_CONTEXT_WINDOW = int(cw)
-
-        if request.reviewer:
-            settings.REVIEWER_API_KEY = request.reviewer.get("apiKey", "")
-            settings.REVIEWER_MODEL = request.reviewer.get("modelId", "")
-            settings.REVIEWER_BASE_URL = request.reviewer.get("baseUrl", "")
-            if api_type := request.reviewer.get("apiType"):
-                settings.REVIEWER_API_TYPE = api_type
-            if cw := request.reviewer.get("contextWindow"):
-                settings.REVIEWER_CONTEXT_WINDOW = int(cw)
+        _apply("COORDINATOR", request.coordinator)
+        _apply("MODELER", request.modeler)
+        _apply("CODER", request.coder)
+        _apply("WRITER", request.writer)
+        _apply("REVIEWER", request.reviewer)
 
         if request.openalex_email:
             settings.OPENALEX_EMAIL = request.openalex_email
+            updates["OPENALEX_EMAIL"] = request.openalex_email
+
+        # 持久化到 .env.dev（失败不阻塞保存流程）
+        try:
+            _persist_env_updates(updates)
+        except Exception as e:
+            logger.error(f"配置持久化失败: {e}")
 
         return {"status": "success", "message": "配置保存成功"}
     except Exception as e:
@@ -169,8 +219,43 @@ async def start_modeling(
     cancel_event = asyncio.Event()
     workflow.cancel_event = cancel_event
 
+    async def _run_and_finalize():
+        """执行工作流并在结束后统一清理：记录状态、回收资源、移除注册表。"""
+        try:
+            await workflow.execute(problem)
+        except asyncio.CancelledError:
+            logger.info(f"任务 {task_id} 被取消")
+            try:
+                await redis_manager.set_task_status(
+                    task_id,
+                    {"task_id": task_id, "status": "cancelled", "progress": 0,
+                     "current_stage": "cancelled", "message": "任务已取消"},
+                )
+            except Exception as e:
+                logger.warning(f"取消状态持久化失败: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"任务 {task_id} 执行失败: {e}")
+            try:
+                await redis_manager.set_task_status(
+                    task_id,
+                    {"task_id": task_id, "status": "error", "progress": 0,
+                     "current_stage": "error", "message": str(e)},
+                )
+                await redis_manager.publish_message(
+                    task_id,
+                    SystemMessage(content=f"任务执行失败: {e}", type="error"),
+                )
+            except Exception as pub_err:
+                logger.warning(f"错误状态发布失败: {pub_err}")
+        finally:
+            try:
+                await workflow.cleanup()
+            finally:
+                _active_tasks.pop(task_id, None)
+
     # 在后台执行任务
-    task = asyncio.create_task(workflow.execute(problem))
+    task = asyncio.create_task(_run_and_finalize())
     _active_tasks[task_id] = (task, cancel_event, workflow)
 
     logger.info(f"任务 {task_id} 已启动，工作目录: {work_dir}")
@@ -188,9 +273,15 @@ async def cancel_modeling(task_id: str):
     if task_id not in _active_tasks:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    task, cancel_event, _ = _active_tasks[task_id]
+    task, cancel_event, workflow = _active_tasks[task_id]
     cancel_event.set()
     task.cancel()
+
+    # 立即释放代码解释器资源（内核/沙盒）
+    try:
+        await workflow.cleanup()
+    except Exception as e:
+        logger.warning(f"取消时清理资源失败: {e}")
 
     await redis_manager.publish_message(
         task_id,

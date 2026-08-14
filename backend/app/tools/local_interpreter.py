@@ -124,6 +124,9 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 content_to_display.append(StdErrModel(msg=out_str))
 
         combined_text = "\n".join(text_to_gpt)
+        # 将本 section 的输出记录下来，供写作手 prompt 引用
+        if combined_text and self.current_section:
+            self.add_content(self.current_section, combined_text)
         await self._push_to_websocket(content_to_display)
 
         return combined_text, error_occurred, error_message
@@ -212,32 +215,32 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         return all_output
 
     async def get_created_images(self, section: str) -> list[str]:
-        """获取当前 section 创建的图片列表。
+        """获取当前 section 新增的图片列表。
 
         扫描工作目录及其子目录下的所有图片文件，
+        与本 section 开始前已记录的图片集合做差集，
         返回相对 work_dir 的路径，供写作手在论文中引用。
 
         Args:
             section: 当前章节名称。
 
         Returns:
-            图片相对路径列表。
+            本 section 新增图片的相对路径列表。
         """
-        images = []
         image_exts = (".png", ".jpg", ".jpeg", ".svg")
-        # 记录 section 开始前已存在的图片，用于计算本 section 新增的图片
-        before = set(self.last_created_images)
+        all_images: set[str] = set()
 
         for root, _, filenames in os.walk(self.work_dir):
             for f in filenames:
                 if f.lower().endswith(image_exts):
                     full_path = os.path.join(root, f)
                     rel_path = os.path.relpath(full_path, self.work_dir).replace(os.sep, "/")
-                    images.append(rel_path)
+                    all_images.add(rel_path)
 
-        # 更新已记录图片集合
-        self.last_created_images = set(images)
-        return images
+        new_images = sorted(all_images - self.last_created_images)
+        # 更新已记录图片集合，确保下一次调用只返回新增图片
+        self.last_created_images = all_images
+        return new_images
 
     async def cleanup(self):
         """清理资源，关闭 Jupyter 内核。"""

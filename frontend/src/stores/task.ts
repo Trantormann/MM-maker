@@ -30,6 +30,16 @@ export const useTaskStore = defineStore("task", () => {
     }
 
     function addMessage(message: TaskMessage) {
+        // HIL 检查点消息：捕获待审批检查点，同时生成一条可读日志
+        if (message.checkpoint_id && message.stage) {
+            pendingCheckpoint.value = message;
+            messages.value.push({
+                content: `等待审批：${message.stage}`,
+                type: "warning",
+            });
+            return;
+        }
+
         messages.value.push(message);
         // 处理不同类型消息
         if (message.status) {
@@ -40,9 +50,6 @@ export const useTaskStore = defineStore("task", () => {
         }
         if (message.current_stage) {
             currentStage.value = message.current_stage;
-        }
-        if (message.stage && message.checkpoint_id) {
-            pendingCheckpoint.value = message;
         }
     }
 

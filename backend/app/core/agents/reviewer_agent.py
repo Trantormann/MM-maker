@@ -26,6 +26,7 @@ class ReviewerAgent(Agent):
     ) -> None:
         super().__init__(task_id, model, context_window, cancel_event=cancel_event)
         self.system_prompt = REVIEWER_PROMPT
+        self.is_first_run = True
 
     async def review_modeling(
         self,
@@ -172,9 +173,12 @@ class ReviewerAgent(Agent):
             SystemMessage(content=f"评审手开始评审: {review_type}"),
         )
 
-        await self.append_chat_history(
-            {"role": "system", "content": self.system_prompt}
-        )
+        # system 提示只写入一次，避免重复评审时堆积
+        if self.is_first_run:
+            self.is_first_run = False
+            await self.append_chat_history(
+                {"role": "system", "content": self.system_prompt}
+            )
         await self.append_chat_history({"role": "user", "content": prompt})
 
         attempt = 0
@@ -213,6 +217,10 @@ class ReviewerAgent(Agent):
                 attempt += 1
                 logger.warning(
                     f"ReviewerAgent JSON 解析失败 (尝试 {attempt}/{MAX_JSON_RETRIES}): {e}"
+                )
+                # 将错误的输出作为 assistant 消息追加，保证对话上下文连贯
+                await self.append_chat_history(
+                    {"role": "assistant", "content": json_str}
                 )
                 await self.append_chat_history(
                     {

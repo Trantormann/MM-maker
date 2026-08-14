@@ -16,7 +16,7 @@ from app.models.user_output import UserOutput
 from app.schemas.A2A import HILCheckpoint, ReviewResult
 from app.schemas.enums import HILAction
 from app.schemas.request import Problem
-from app.schemas.response import SystemMessage, TaskStatusMessage
+from app.schemas.response import SystemMessage, TaskStatusMessage, HILCheckpointMessage
 from app.services.redis_manager import redis_manager
 from app.tools.interpreter_factory import create_interpreter
 from app.tools.notebook_serializer import NotebookSerializer
@@ -44,6 +44,7 @@ class MathModelWorkFlow(WorkFlow):
     ques_count: int = 0
     questions: dict[str, str | int] = {}
     cancel_event: asyncio.Event | None = None
+    code_interpreter = None
 
     # HIL 相关
     hil_enabled: bool = True
@@ -66,17 +67,28 @@ class MathModelWorkFlow(WorkFlow):
             raise asyncio.CancelledError("任务被用户停止")
 
     async def _publish_status(self, status: str, progress: float, stage: str, message: str):
-        """发布任务状态。"""
-        await redis_manager.publish_message(
-            self.task_id,
-            TaskStatusMessage(
-                task_id=self.task_id,
-                status=status,
-                progress=progress,
-                current_stage=stage,
-                message=message,
-            ),
+        """发布任务状态，并持久化到 Redis 供查询。"""
+        status_msg = TaskStatusMessage(
+            task_id=self.task_id,
+            status=status,
+            progress=progress,
+            current_stage=stage,
+            message=message,
         )
+        await redis_manager.publish_message(self.task_id, status_msg)
+        try:
+            await redis_manager.set_task_status(
+                self.task_id,
+                {
+                    "task_id": self.task_id,
+                    "status": status,
+                    "progress": progress,
+                    "current_stage": stage,
+                    "message": message,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"任务状态持久化失败: {e}")
 
     async def _wait_hil_decision(self, checkpoint: HILCheckpoint) -> HILCheckpoint:
         """等待 HIL 用户决策。
@@ -94,7 +106,16 @@ class MathModelWorkFlow(WorkFlow):
         self.pending_checkpoint = checkpoint
         self.checkpoint_event = asyncio.Event()
 
-        # 发布检查点消息
+        # 发布检查点消息（携带 checkpoint_id 和 stage，供前端弹出决策 UI）
+        await redis_manager.publish_message(
+            self.task_id,
+            HILCheckpointMessage(
+                checkpoint_id=checkpoint.checkpoint_id,
+                stage=checkpoint.stage,
+                content=checkpoint.content,
+                timeout=settings.HIL_TIMEOUT,
+            ),
+        )
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(
@@ -252,16 +273,21 @@ class MathModelWorkFlow(WorkFlow):
             if review_result.needs_revision and self.feedback_iteration < self.max_feedback_iterations:
                 self.feedback_iteration += 1
                 logger.info(f"建模方案需要修改 (第{self.feedback_iteration}次反馈): {review_result.feedback}")
-                # 将反馈注入建模手重新生成
-                feedback_prompt = f"""
-                之前的建模方案评审结果：
-                得分：{review_result.score}/10
-                反馈：{review_result.feedback}
-                改进建议：{chr(10).join(review_result.suggestions)}
-                请根据反馈重新生成建模方案。
-                """
-                # 这里可以扩展为重新调用 modeler_agent
-                # 为简化，当前仅记录反馈
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=f"建模方案评审得分 {review_result.score}/10，正在根据反馈重新生成...",
+                        type="warning",
+                    ),
+                )
+                feedback_prompt = (
+                    f"评审得分：{review_result.score}/10\n"
+                    f"反馈：{review_result.feedback}\n"
+                    f"改进建议：{'；'.join(review_result.suggestions)}"
+                )
+                modeler_response = await modeler_agent.run(
+                    coordinator_response, feedback=feedback_prompt
+                )
 
         # ========== 阶段 3: 初始化环境 ==========
         await redis_manager.publish_message(
@@ -271,13 +297,14 @@ class MathModelWorkFlow(WorkFlow):
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
         notebook_serializer = NotebookSerializer(work_dir=self.work_dir)
-        code_interpreter = await create_interpreter(
+        self.code_interpreter = await create_interpreter(
             kind=settings.CODE_INTERPRETER_KIND,
             task_id=self.task_id,
             work_dir=self.work_dir,
             notebook_serializer=notebook_serializer,
             timeout=3000,
         )
+        code_interpreter = self.code_interpreter
 
         scholar = None
         if settings.OPENALEX_EMAIL:
@@ -352,7 +379,11 @@ class MathModelWorkFlow(WorkFlow):
 
             # 写作手撰写对应章节
             writer_prompt = flows.get_writer_prompt(
-                key, coder_response.code_response or "", code_interpreter, config_template
+                key,
+                coder_response.code_response or "",
+                coder_response.created_images or [],
+                code_interpreter,
+                config_template,
             )
 
             await redis_manager.publish_message(
@@ -383,7 +414,7 @@ class MathModelWorkFlow(WorkFlow):
             await self._publish_status("running", progress, "solve", f"完成: {key}")
 
         # 关闭沙盒
-        await code_interpreter.cleanup()
+        await self.cleanup()
         logger.info(user_output.get_res())
 
         # ========== 阶段 5: 写作阶段 ==========
@@ -462,3 +493,13 @@ class MathModelWorkFlow(WorkFlow):
         )
 
         logger.info(f"任务 {self.task_id} 完成，结果保存在 {self.work_dir}")
+
+    async def cleanup(self) -> None:
+        """清理工作流资源（代码解释器等），异常/取消时也会调用。"""
+        if self.code_interpreter is not None:
+            try:
+                await self.code_interpreter.cleanup()
+            except Exception as e:
+                logger.warning(f"代码解释器清理失败: {e}")
+            finally:
+                self.code_interpreter = None

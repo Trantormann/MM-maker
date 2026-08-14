@@ -23,6 +23,7 @@ class BaseCodeInterpreter(abc.ABC):
         self.notebook_serializer = notebook_serializer
         self.section_output: dict[str, dict[str, list[str]]] = {}
         self.last_created_images = set()
+        self.current_section: str | None = None
 
     @abc.abstractmethod
     async def initialize(self):
@@ -56,7 +57,8 @@ class BaseCodeInterpreter(abc.ABC):
         await redis_manager.publish_message(self.task_id, agent_msg)
 
     def add_section(self, section_name: str) -> None:
-        """确保添加的 section 结构正确。"""
+        """确保添加的 section 结构正确，并标记为当前章节。"""
+        self.current_section = section_name
         if section_name not in self.section_output:
             self.section_output[section_name] = {"content": [], "images": []}
 

@@ -133,6 +133,7 @@ class Flows:
         self,
         key: str,
         coder_response: str,
+        created_images: list[str],
         code_interpreter: BaseCodeInterpreter,
         config_template: dict,
     ) -> str:
@@ -141,6 +142,7 @@ class Flows:
         Args:
             key: 章节标识。
             coder_response: 代码执行结果。
+            created_images: 本子任务生成的图片列表（来自 CoderToWriter）。
             code_interpreter: 代码解释器。
             config_template: 竞赛模板配置。
 
@@ -148,7 +150,6 @@ class Flows:
             写作提示词。
         """
         code_output = code_interpreter.get_code_output(key)
-        created_images = code_interpreter.get_created_images(key)
 
         prompt = f"""
 请撰写"{key}"部分的论文内容。

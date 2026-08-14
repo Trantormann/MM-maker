@@ -66,25 +66,37 @@ class ModelerAgent(Agent):
     ) -> None:
         super().__init__(task_id, model, context_window, cancel_event=cancel_event)
         self.system_prompt = MODELER_PROMPT
+        self.is_first_run = True
 
-    async def run(self, coordinator_to_modeler: CoordinatorToModeler) -> ModelerToCoder:
+    async def run(
+        self,
+        coordinator_to_modeler: CoordinatorToModeler,
+        feedback: str | None = None,
+    ) -> ModelerToCoder:
         """根据协调者拆解的问题生成建模方案。
 
         Args:
             coordinator_to_modeler: 协调者传递的结构化问题信息。
+            feedback: 评审反馈，用于重新生成建模方案时注入改进意见。
 
         Returns:
             ModelerToCoder 对象，包含各问题的建模解决方案。
         """
-        await self.append_chat_history(
-            {"role": "system", "content": self.system_prompt}
+        user_content = json.dumps(
+            coordinator_to_modeler.questions, ensure_ascii=False
         )
-        await self.append_chat_history(
-            {
-                "role": "user",
-                "content": json.dumps(coordinator_to_modeler.questions, ensure_ascii=False),
-            }
-        )
+        if feedback:
+            user_content += (
+                f"\n\n【评审反馈，请据此改进建模方案】\n{feedback}"
+            )
+
+        # system 提示只写入一次，避免重新生成时重复堆积
+        if self.is_first_run:
+            self.is_first_run = False
+            await self.append_chat_history(
+                {"role": "system", "content": self.system_prompt}
+            )
+        await self.append_chat_history({"role": "user", "content": user_content})
 
         attempt = 0
         while attempt < MAX_JSON_RETRIES:

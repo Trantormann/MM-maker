@@ -16,6 +16,8 @@ let wsClient: WebSocketClient | null = null;
 const paperContent = ref("");
 const showPaper = ref(false);
 const autoScroll = ref(true);
+const hilFeedback = ref("");
+const submittingDecision = ref(false);
 
 // ---- 阶段定义 ----
 const stages = [
@@ -34,6 +36,14 @@ const currentStageIndex = computed(() => {
 
 const isRunning = computed(() => taskStore.status === "running");
 const isCompleted = computed(() => taskStore.status === "completed");
+const hasPendingCheckpoint = computed(() => taskStore.pendingCheckpoint !== null);
+
+const hilActions = [
+	{ value: "confirm", label: "确认继续", icon: "✅" },
+	{ value: "regenerate", label: "重新生成", icon: "🔄" },
+	{ value: "skip", label: "跳过", icon: "⏭️" },
+	{ value: "abort", label: "中止任务", icon: "🛑" },
+];
 
 // ---- Methods ----
 function renderMarkdown(content: string): string {
@@ -62,6 +72,26 @@ async function loadPaper() {
 		showPaper.value = true;
 	} catch (e) {
 		console.error("加载论文失败", e);
+	}
+}
+
+async function submitDecision(action: string) {
+	const cp = taskStore.pendingCheckpoint;
+	if (!cp || !cp.checkpoint_id) return;
+	submittingDecision.value = true;
+	try {
+		await modelingApi.submitHilDecision(
+			taskId,
+			cp.checkpoint_id,
+			action,
+			hilFeedback.value || undefined,
+		);
+		taskStore.pendingCheckpoint = null;
+		hilFeedback.value = "";
+	} catch (e) {
+		console.error("提交决策失败", e);
+	} finally {
+		submittingDecision.value = false;
 	}
 }
 
@@ -135,6 +165,35 @@ onUnmounted(() => {
 								进行中...
 							</span>
 						</div>
+					</div>
+				</div>
+
+				<!-- HIL 决策面板 -->
+				<div v-if="hasPendingCheckpoint" class="hil-panel">
+					<div class="hil-header">
+						<span class="hil-icon">🧑‍⚖️</span>
+						<span class="hil-title">等待您的决策</span>
+					</div>
+					<p class="hil-stage">
+						检查点：{{ taskStore.pendingCheckpoint?.stage }}
+					</p>
+					<textarea
+						v-model="hilFeedback"
+						class="hil-input"
+						rows="3"
+						placeholder="可选：填写反馈或修改意见..."
+					></textarea>
+					<div class="hil-actions">
+						<button
+							v-for="action in hilActions"
+							:key="action.value"
+							class="hil-btn"
+							:disabled="submittingDecision"
+							@click="submitDecision(action.value)"
+						>
+							<span>{{ action.icon }}</span>
+							{{ action.label }}
+						</button>
 					</div>
 				</div>
 
@@ -363,6 +422,78 @@ onUnmounted(() => {
 .stage-status {
 	font-size: 11px;
 	color: var(--primary);
+}
+
+/* ---- HIL 决策面板 ---- */
+.hil-panel {
+	margin-bottom: 16px;
+	padding: 14px;
+	background: rgba(245, 158, 11, 0.08);
+	border: 1px solid rgba(245, 158, 11, 0.4);
+	border-radius: 10px;
+}
+
+.hil-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.hil-icon {
+	font-size: 18px;
+}
+
+.hil-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.hil-stage {
+	font-size: 12px;
+	color: var(--text-secondary);
+	margin-bottom: 8px;
+}
+
+.hil-input {
+	width: 100%;
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	font-size: 13px;
+	resize: vertical;
+	margin-bottom: 10px;
+	box-sizing: border-box;
+}
+
+.hil-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.hil-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg-card);
+	font-size: 12px;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.hil-btn:hover:not(:disabled) {
+	border-color: var(--primary);
+	color: var(--primary);
+}
+
+.hil-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 
 /* ---- 消息日志 ---- */
